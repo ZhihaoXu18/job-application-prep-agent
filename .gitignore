@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.pdf
+*.docx
+posting.txt
+job_agent_output/
+applications.csv
