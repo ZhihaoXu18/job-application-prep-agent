@@ -1,5 +1,7 @@
 # Job Application Prep Agent
 
+See [the eight-week roadmap](ROADMAP.md) for the project milestones. `AGENTS.md` gives Codex the repository's factuality and privacy boundaries.
+
 A small, local Python tool that prepares a review packet for one Canadian data internship posting. It reads a text-based résumé PDF and either an employer job URL or a copied posting. It extracts stated dates and term length, identifies fit and gaps, proposes factual résumé bullet edits, drafts a short application paragraph, and records the job in a CSV tracker.
 
 The packet is **not an application**. Check all facts against the live employer posting, complete required assessments, and submit the application yourself. A reachable page does not prove that the role is still open. The tool does not search for new jobs or log in to applicant systems.
