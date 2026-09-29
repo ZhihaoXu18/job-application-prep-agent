@@ -148,6 +148,58 @@ def md_escape(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ").strip()
 
 
+def normalized(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def check_analysis(a: Analysis, resume: str, posting: str) -> Analysis:
+    """Fail closed on unsupported quoted facts and eight-month claims."""
+    fact_names = (
+        "location", "term", "start_date", "deadline", "publication_date", "work_mode"
+    )
+    source = normalized(posting)
+    for name in fact_names:
+        fact = getattr(a, name)
+        quote = normalized(fact.source_quote)
+        if not quote or quote not in source:
+            if normalized(fact.value) not in {"not stated", "unknown", "未注明"}:
+                a.user_actions.append(f"Verify {name.replace('_', ' ')} on the employer page; supporting quote missing.")
+            fact.value = "Not stated"
+            fact.source_quote = ""
+
+    term_quote = normalized(a.term.source_quote)
+    mixed = bool(re.search(
+        r"\b(?:4|four)\s*(?:or|/|and|-)\s*(?:8|eight)[ -]*months?\b",
+        term_quote,
+    ))
+    four = mixed or bool(re.search(r"\b(?:4|four)[ -]*months?\b", term_quote))
+    eight = bool(re.search(r"\b(?:8|eight)[ -]*months?\b", term_quote))
+    jan_aug = bool(re.search(r"\bjan(?:uary)?\b.{0,30}\baug(?:ust)?\b", term_quote))
+    if four and not eight and not jan_aug:
+        a.term_classification = "4_month_only"
+        a.priority = "low"
+    elif mixed or (four and (eight or jan_aug)):
+        a.term_classification = "variable_or_unclear"
+        a.user_actions.append("Confirm that the employer offers an eight-month placement for this role.")
+    elif not eight and not jan_aug:
+        a.term_classification = "variable_or_unclear"
+        a.user_actions.append("Eight-month term is not independently supported by the quoted posting text.")
+    elif a.term_classification == "4_month_only":
+        # A four-month classification conflicts with the extracted quote.
+        a.term_classification = "variable_or_unclear"
+        a.user_actions.append("Term classification conflicts with the quoted posting text; verify manually.")
+
+    original_resume = normalized(resume)
+    safe_edits = []
+    for edit in a.resume_edits:
+        if normalized(edit.original) in original_resume:
+            safe_edits.append(edit)
+        else:
+            a.user_actions.append("A resume edit was omitted because its original bullet did not match the resume.")
+    a.resume_edits = safe_edits
+    return a
+
+
 def render_packet(a: Analysis, resume: str, posting: str, source: str, checked_at: str) -> str:
     facts = [
         ("Location", a.location), ("Term", a.term), ("Start", a.start_date),
@@ -244,7 +296,7 @@ def main() -> int:
     if len(posting.strip()) < 300:
         parser.error("Posting text is too short to evaluate")
     checked_at = now_toronto()
-    result = make_analysis(resume, posting, source)
+    result = check_analysis(make_analysis(resume, posting, source), resume, posting)
     identity = canonical_url(args.url) if args.url else hashlib.sha256(posting.encode()).hexdigest()
     job_id = hashlib.sha256(identity.encode()).hexdigest()[:12]
     args.out.mkdir(parents=True, exist_ok=True)
