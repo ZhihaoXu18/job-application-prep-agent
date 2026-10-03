@@ -20,19 +20,22 @@ import hashlib
 import json
 import re
 import sys
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 TRACKER_FIELDS = [
-    "job_id", "employer", "title", "url", "prepared_at", "packet", "status", "outcome_at"
+    "job_id", "employer", "title", "url", "prepared_at", "packet", "status", "outcome_at",
+    "content_fingerprint",
 ]
 STATUSES = ("prepared", "applied", "interview", "rejected", "no_response", "offer")
+TRACKING_PARAMETERS = {"fbclid", "gclid", "msclkid", "mc_cid", "mc_eid"}
 
 
 class Fact(BaseModel):
@@ -92,6 +95,15 @@ class Analysis(BaseModel):
     resume_edits: list[BulletEdit]
     application_paragraph: str
     user_actions: list[str]
+
+
+@dataclass(frozen=True)
+class PreparedJob:
+    job_id: str
+    packet: Path
+    source: str
+    analysis: Analysis
+    title_supported: bool = False
 
 
 def now_toronto() -> str:
@@ -450,7 +462,165 @@ def write_tracker(path: Path, rows: list[dict[str, str]]) -> None:
 
 def canonical_url(url: str) -> str:
     p = urlsplit(url.strip())
-    return urlunsplit((p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), "", ""))
+    query = sorted(
+        (key, value)
+        for key, value in parse_qsl(p.query, keep_blank_values=True)
+        if not key.casefold().startswith("utm_") and key.casefold() not in TRACKING_PARAMETERS
+    )
+    return urlunsplit((
+        p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), urlencode(query), ""
+    ))
+
+
+def job_id_for_source(url: str | None, posting: str = "") -> str:
+    identity = canonical_url(url) if url else hashlib.sha256(posting.encode()).hexdigest()
+    return hashlib.sha256(identity.encode()).hexdigest()[:12]
+
+
+def posting_fingerprint(posting: str) -> str:
+    return hashlib.sha256(normalized(posting).encode()).hexdigest()
+
+
+def already_tracked(
+    rows: list[dict[str, str]], job_id: str, url: str | None, fingerprint: str | None = None
+) -> bool:
+    """Also recognize URLs saved before identity query parameters were preserved."""
+    return any(
+        row.get("job_id") == job_id
+        or (url is not None and row.get("url") and canonical_url(row["url"]) == canonical_url(url))
+        or (fingerprint is not None and row.get("content_fingerprint") == fingerprint)
+        for row in rows
+    )
+
+
+def quoted_date(fact: Fact) -> date | None:
+    """Use only an unambiguous date visible in the employer-text quote."""
+    if not fact.source_quote:
+        return None
+    patterns = (
+        r"\b\d{4}-\d{1,2}-\d{1,2}\b",
+        r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},?\s+\d{4}\b",
+    )
+    found: set[date] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, fact.source_quote, flags=re.IGNORECASE):
+            raw = re.sub(r"\bSept\b", "Sep", match.group(0), flags=re.IGNORECASE).replace(".", "")
+            try:
+                if raw[:4].isdigit():
+                    parsed = datetime.strptime(raw, "%Y-%m-%d").date()
+                else:
+                    parsed = None
+                    for fmt in ("%B %d, %Y", "%B %d %Y", "%b %d, %Y", "%b %d %Y"):
+                        try:
+                            parsed = datetime.strptime(raw, fmt).date()
+                            break
+                        except ValueError:
+                            pass
+                    if parsed is None:
+                        continue
+                found.add(parsed)
+            except ValueError:
+                continue
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def rank_job(job: PreparedJob, profile: CandidateProfile, today: date) -> tuple[int, list[str]]:
+    """Transparent review order, not an estimate of hiring odds or live availability."""
+    a = job.analysis
+    preferences = profile.preferences
+    score = 0
+    reasons: list[str] = []
+    desired = normalized(preferences.desired_term)
+    if desired in {"8 months", "8-month", "eight months"}:
+        if a.term_classification == "8_month_confirmed":
+            score += 40
+            reasons.append("8-month term supported by the posting quote (+40)")
+        elif a.term_classification == "variable_or_unclear":
+            reasons.append("8-month term needs confirmation (+0)")
+    elif desired in {"4 months", "4-month", "four months"}:
+        if a.term_classification == "4_month_only":
+            score += 40
+            reasons.append("4-month term supported by the posting quote (+40)")
+        elif a.term_classification == "variable_or_unclear":
+            reasons.append("4-month term needs confirmation (+0)")
+
+    title = normalized(a.title)
+    if job.title_supported and any(
+        normalized(role) and normalized(role) in title for role in preferences.target_roles
+    ):
+        score += 20
+        reasons.append("target role appears in posting-supported title (+20)")
+    location = normalized(a.location.value)
+    if a.location.source_quote and any(
+        normalized(place) and normalized(place) in location for place in preferences.preferred_locations
+    ):
+        score += 10
+        reasons.append("preferred location appears in supported posting fact (+10)")
+    mode = normalized(a.work_mode.value)
+    if a.work_mode.source_quote and any(
+        normalized(choice) and normalized(choice) in mode for choice in preferences.preferred_work_modes
+    ):
+        score += 5
+        reasons.append("preferred work mode appears in supported posting fact (+5)")
+
+    deadline = quoted_date(a.deadline)
+    if deadline:
+        days = (deadline - today).days
+        if days < 0:
+            score -= 20
+            reasons.append("quoted deadline appears past; verify live status (-20)")
+        elif days <= 7:
+            score += 15
+            reasons.append("quoted deadline within 7 days (+15)")
+        elif days <= 30:
+            score += 8
+            reasons.append("quoted deadline within 30 days (+8)")
+        else:
+            score += 3
+            reasons.append("quoted future deadline (+3)")
+    else:
+        reasons.append("deadline unknown or ambiguous (+0)")
+
+    published = quoted_date(a.publication_date)
+    if published and published <= today:
+        age = (today - published).days
+        if age <= 14:
+            score += 5
+            reasons.append("employer-quoted publication within 14 days (+5)")
+        elif age <= 60:
+            score += 2
+            reasons.append("employer-quoted publication within 60 days (+2)")
+    else:
+        reasons.append("employer publication date unknown (+0)")
+    return score, reasons
+
+
+def write_priority_queue(out: Path, jobs: list[PreparedJob], profile: CandidateProfile) -> Path:
+    out.mkdir(parents=True, exist_ok=True)
+    queue = out / "priority_queue.md"
+    today = datetime.now(ZoneInfo("America/Toronto")).date()
+    ranked = sorted(
+        ((rank_job(job, profile, today), job) for job in jobs),
+        key=lambda item: (-item[0][0], item[1].job_id),
+    )
+    lines = [
+        "# Batch review queue", "", f"Ranked on: {today.isoformat()}",
+        "This score orders manual review only; it does not predict hiring odds or prove a role is open.",
+        "Only jobs newly prepared in this batch are listed. Verify the live employer posting before applying.", "",
+    ]
+    if not ranked:
+        lines.append("No new jobs were prepared in this batch.")
+    for index, ((score, reasons), job) in enumerate(ranked, 1):
+        a = job.analysis
+        lines += [
+            f"## {index}. {a.title} — {a.employer}", "",
+            f"- Review score: {score}", f"- Job ID: {job.job_id}",
+            f"- Source: {job.source}", f"- Packet: {job.packet.name}",
+            f"- Term: {a.term_classification}",
+            *[f"- {reason}" for reason in reasons], "",
+        ]
+    queue.write_text("\n".join(lines), encoding="utf-8")
+    return queue
 
 
 def prepare_job(
@@ -460,29 +630,34 @@ def prepare_job(
     source: str,
     url: str | None,
     out: Path,
-) -> tuple[str, Path]:
+) -> PreparedJob | None:
+    job_id = job_id_for_source(url, posting)
+    tracker = out / "applications.csv"
+    fingerprint = posting_fingerprint(posting)
+    if already_tracked(read_tracker(tracker), job_id, url, fingerprint):
+        print(f"Skipped already tracked job: {source} (Job ID: {job_id})")
+        return None
     checked_at = now_toronto()
     result = check_analysis(make_analysis(resume, posting, source, profile), resume, posting)
-    identity = canonical_url(url) if url else hashlib.sha256(posting.encode()).hexdigest()
-    job_id = hashlib.sha256(identity.encode()).hexdigest()[:12]
     out.mkdir(parents=True, exist_ok=True)
     packet = out / f"{job_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
     packet.write_text(render_packet(result, resume, posting, source, checked_at), encoding="utf-8")
 
-    tracker = out / "applications.csv"
     rows = read_tracker(tracker)
-    if not any(row["job_id"] == job_id for row in rows):
-        rows.append({
-            "job_id": job_id, "employer": result.employer, "title": result.title,
-            "url": url or "", "prepared_at": checked_at, "packet": str(packet),
-            "status": "prepared", "outcome_at": "",
-        })
-        write_tracker(tracker, rows)
+    rows.append({
+        "job_id": job_id, "employer": result.employer, "title": result.title,
+        "url": url or "", "prepared_at": checked_at, "packet": str(packet),
+        "status": "prepared", "outcome_at": "", "content_fingerprint": fingerprint,
+    })
+    write_tracker(tracker, rows)
 
     print(f"Prepared: {packet}\nTracker: {tracker}\nJob ID: {job_id}")
     if result.term_classification != "8_month_confirmed":
         print("Eight-month term NOT confirmed. Check before applying.")
-    return job_id, packet
+    return PreparedJob(
+        job_id, packet, source, result,
+        title_supported=bool(result.title and normalized(result.title) in normalized(posting)),
+    )
 
 
 def main() -> int:
@@ -527,17 +702,50 @@ def main() -> int:
 
     if args.batch_file:
         specs = read_batch_sources(args.batch_file)
-        completed = 0
+        prepared: list[PreparedJob] = []
+        duplicates = 0
+        tracked_rows = read_tracker(tracker)
+        seen_ids = {row.get("job_id") for row in tracked_rows}
+        seen_urls = {
+            canonical_url(row["url"]) for row in tracked_rows if row.get("url")
+        }
+        seen_fingerprints = {
+            row["content_fingerprint"] for row in tracked_rows if row.get("content_fingerprint")
+        }
         failures: list[tuple[str, str]] = []
         for spec in specs:
             try:
+                if "://" in spec and (
+                    job_id_for_source(spec) in seen_ids or canonical_url(spec) in seen_urls
+                ):
+                    duplicates += 1
+                    print(f"Skipped duplicate or already tracked URL: {spec}")
+                    continue
                 posting, source, url = load_batch_source(spec, args.batch_file)
-                prepare_job(resume, profile, posting, source, url, args.out)
-                completed += 1
+                job_id = job_id_for_source(url, posting)
+                fingerprint = posting_fingerprint(posting)
+                if job_id in seen_ids or fingerprint in seen_fingerprints:
+                    duplicates += 1
+                    seen_ids.add(job_id)
+                    if url:
+                        seen_urls.add(canonical_url(url))
+                    print(f"Skipped duplicate or already tracked source: {spec}")
+                    continue
+                job = prepare_job(resume, profile, posting, source, url, args.out)
+                if job is None:
+                    duplicates += 1
+                    continue
+                prepared.append(job)
+                seen_ids.add(job_id)
+                if url:
+                    seen_urls.add(canonical_url(url))
+                seen_fingerprints.add(fingerprint)
             except Exception as exc:
                 failures.append((spec, str(exc)))
                 print(f"Skipped {spec}: {exc}", file=sys.stderr)
-        print(f"Batch complete: {completed} prepared, {len(failures)} failed.")
+        queue = write_priority_queue(args.out, prepared, profile)
+        print(f"Batch complete: {len(prepared)} prepared, {duplicates} duplicates, {len(failures)} failed.")
+        print(f"Review queue: {queue}")
         return 1 if failures else 0
 
     if args.url:

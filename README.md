@@ -63,7 +63,9 @@ python job_agent.py \
   --batch-file jobs.txt
 ```
 
-Batch processing writes one review packet per successfully prepared source and a shared tracker. A failed source is reported and does not stop later sources; the command exits with status 1 if any source failed. Batch input is processed in manifest order and is not yet deduplicated or ranked.
+Batch processing writes one review packet per newly prepared job, a shared tracker, and `priority_queue.md` in the output directory. Repeated URLs and text-identical postings are skipped within a batch and on later runs using the same tracker, so rerunning them does not make another model request. Older tracker rows lack the new content fingerprint but remain readable and are still matched by job ID or saved URL. URL normalization removes common tracking parameters but preserves identity parameters such as `jobId`. To prepare a tracked job again, use a separate `--out` directory. A failed source is reported and does not stop later sources; the command exits with status 1 if any source failed.
+
+The review queue sorts only newly prepared jobs. Its transparent score uses your stated role, location, work-mode, and term preferences plus an unambiguous quoted deadline and employer publication date. Missing or ambiguous dates get no date points; the page retrieval date is never treated as the publication date. A past quoted deadline lowers the review score but does not prove the posting is closed. The score is an ordering aid, not an eligibility check or prediction of hiring odds. See [Day 7 details](docs/day-7-dedup-priority.md).
 
 The script writes a Markdown review packet and `applications.csv` inside `job_agent_output/`. It uses `gpt-6-sol` through the OpenAI Responses API. The model's extracted dates and source quotes are hints for review, not independently verified evidence. Four-month-only and ambiguous terms are explicitly flagged.
 
@@ -86,7 +88,7 @@ Other values: `rejected`, `no_response`, `offer`. The tracker helps compare actu
 
 ## Current scope
 
-- Single-posting and sequential batch preparation; no automatic job discovery or batch submission.
+- Single-posting and deduplicated batch preparation; no automatic job discovery or batch submission.
 - No automatic submission, account login, PLUM test, or video interview.
 - Text-based PDFs only; scanned résumés need OCR before use.
 - Human review is required for every claim and edit.

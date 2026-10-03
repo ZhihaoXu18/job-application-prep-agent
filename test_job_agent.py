@@ -1,5 +1,6 @@
 import unittest
 import json
+from datetime import date
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -13,12 +14,19 @@ from job_agent import (
     BulletEdit,
     CandidateProfile,
     Fact,
+    PreparedJob,
+    ProfilePreferences,
+    already_tracked,
     analysis_messages,
     canonical_url,
     check_analysis,
     fetch_job,
     load_batch_source,
     main,
+    job_id_for_source,
+    quoted_date,
+    rank_job,
+    write_priority_queue,
     read_batch_sources,
     read_profile,
     read_resume,
@@ -451,9 +459,10 @@ class BatchChecks(unittest.TestCase):
                 self.assertEqual(main(), 0)
 
             self.assertEqual(mocked.call_count, 4)
-            self.assertEqual(len(list(output.glob("*.md"))), 4)
+            self.assertEqual(len(list(output.glob("*.md"))), 5)
             self.assertEqual(len(read_tracker(output / "applications.csv")), 4)
-            self.assertIn("Batch complete: 4 prepared, 0 failed.", stdout.getvalue())
+            self.assertIn("Batch complete: 4 prepared, 0 duplicates, 0 failed.", stdout.getvalue())
+            self.assertIn("# Batch review queue", (output / "priority_queue.md").read_text())
 
     def test_batch_continues_after_one_source_fails(self):
         with TemporaryDirectory() as directory:
@@ -485,8 +494,150 @@ class BatchChecks(unittest.TestCase):
 
             self.assertEqual(mocked.call_count, 1)
             self.assertEqual(len(read_tracker(output / "applications.csv")), 1)
-            self.assertIn("Batch complete: 1 prepared, 1 failed.", stdout.getvalue())
+            self.assertIn("Batch complete: 1 prepared, 0 duplicates, 1 failed.", stdout.getvalue())
             self.assertIn("Skipped missing-posting.txt", stderr.getvalue())
+            self.assertIn("Job ID:", (output / "priority_queue.md").read_text())
+
+    def test_batch_deduplicates_repeated_urls_before_fetch_and_model(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "batch.txt"
+            manifest.write_text(
+                "https://employer.example/jobs?jobId=123&utm_source=mail\n"
+                "https://employer.example/jobs?jobId=123#apply\n",
+                encoding="utf-8",
+            )
+            output = root / "output"
+            argv = ["job_agent.py", "--resume", str(FIXTURES / "synthetic_resume.md"),
+                    "--batch-file", str(manifest), "--out", str(output)]
+            with (
+                patch("sys.argv", argv),
+                patch("job_agent.fetch_job", return_value=fixture("job_explicit_eight_months.txt")) as fetched,
+                patch("job_agent.make_analysis", return_value=make_analysis("")) as analyzed,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(main(), 0)
+            self.assertEqual(fetched.call_count, 1)
+            self.assertEqual(analyzed.call_count, 1)
+            self.assertEqual(len(read_tracker(output / "applications.csv")), 1)
+            with (
+                patch("sys.argv", argv),
+                patch("job_agent.fetch_job") as fetched_again,
+                patch("job_agent.make_analysis") as analyzed_again,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(main(), 0)
+            fetched_again.assert_not_called()
+            analyzed_again.assert_not_called()
+            self.assertIn("No new jobs", (output / "priority_queue.md").read_text())
+
+    def test_batch_deduplicates_equal_posting_text_at_different_paths(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            posting = fixture("job_term_unstated.txt")
+            (root / "one.txt").write_text(posting, encoding="utf-8")
+            (root / "two.txt").write_text("  " + posting + "\n", encoding="utf-8")
+            manifest = root / "batch.txt"
+            manifest.write_text("one.txt\ntwo.txt\n", encoding="utf-8")
+            argv = ["job_agent.py", "--resume", str(FIXTURES / "synthetic_resume.md"),
+                    "--batch-file", str(manifest), "--out", str(root / "output")]
+            stdout = StringIO()
+            with (
+                patch("sys.argv", argv),
+                patch("job_agent.make_analysis", return_value=make_analysis("")) as analyzed,
+                redirect_stdout(stdout),
+            ):
+                self.assertEqual(main(), 0)
+            analyzed.assert_called_once()
+            self.assertIn("1 prepared, 1 duplicates, 0 failed", stdout.getvalue())
+
+    def test_content_fingerprint_skips_same_posting_on_later_batch(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            posting = fixture("job_term_unstated.txt")
+            (root / "one.txt").write_text(posting, encoding="utf-8")
+            (root / "two.txt").write_text("  " + posting + "\n", encoding="utf-8")
+            manifest = root / "batch.txt"
+            output = root / "output"
+            argv = ["job_agent.py", "--resume", str(FIXTURES / "synthetic_resume.md"),
+                    "--batch-file", str(manifest), "--out", str(output)]
+            with (
+                patch("sys.argv", argv),
+                patch("job_agent.make_analysis", return_value=make_analysis("")) as analyzed,
+                redirect_stdout(StringIO()),
+            ):
+                manifest.write_text("one.txt\n", encoding="utf-8")
+                self.assertEqual(main(), 0)
+                manifest.write_text("two.txt\n", encoding="utf-8")
+                self.assertEqual(main(), 0)
+            analyzed.assert_called_once()
+            rows = read_tracker(output / "applications.csv")
+            self.assertEqual(len(rows), 1)
+            self.assertTrue(rows[0]["content_fingerprint"])
+
+    def test_distinct_job_identity_query_parameters_do_not_collide(self):
+        first = "https://employer.example/jobs?jobId=123&utm_source=mail"
+        second = "https://employer.example/jobs?jobId=456&utm_source=mail"
+        self.assertNotEqual(canonical_url(first), canonical_url(second))
+        self.assertNotEqual(job_id_for_source(first), job_id_for_source(second))
+
+    def test_older_tracker_url_is_recognized_after_url_identity_change(self):
+        url = "https://employer.example/jobs?jobId=123&utm_source=mail"
+        old_id = job_id_for_source("https://employer.example/jobs")
+        self.assertTrue(already_tracked([{"job_id": old_id, "url": url}], job_id_for_source(url), url))
+
+
+class RankingChecks(unittest.TestCase):
+    def test_rank_uses_supported_terms_preferences_and_quoted_dates(self):
+        a = make_analysis("Work term: 8 months.")
+        a.deadline = Fact(value="October 8, 2026", source_quote="Apply by October 8, 2026.")
+        a.publication_date = Fact(value="October 1, 2026", source_quote="Posted October 1, 2026.")
+        a.location = Fact(value="Toronto, Ontario", source_quote="Location: Toronto, Ontario")
+        a.work_mode = Fact(value="Hybrid", source_quote="Work mode: Hybrid")
+        profile = CandidateProfile(preferences=ProfilePreferences(
+            target_roles=["Data Analyst"], preferred_locations=["Toronto"],
+            preferred_work_modes=["Hybrid"], desired_term="8 months",
+        ))
+        job = PreparedJob("abc", Path("packet.md"), "synthetic job", a, title_supported=True)
+        score, reasons = rank_job(job, profile, date(2026, 10, 3))
+        self.assertEqual(score, 95)
+        self.assertIn("employer-quoted publication within 14 days (+5)", reasons)
+
+    def test_unknown_and_ambiguous_dates_do_not_get_recency_points(self):
+        a = make_analysis("", "variable_or_unclear")
+        a.deadline = Fact(value="2026-10-10", source_quote="October 10, 2026 or October 20, 2026")
+        a.publication_date = Fact(value="Not stated", source_quote="")
+        self.assertIsNone(quoted_date(a.deadline))
+        job = PreparedJob("abc", Path("packet.md"), "synthetic job", a)
+        score, reasons = rank_job(job, CandidateProfile(), date(2026, 10, 3))
+        self.assertEqual(score, 0)
+        self.assertIn("employer publication date unknown (+0)", reasons)
+
+    def test_past_deadline_is_not_called_closed(self):
+        a = make_analysis("", "variable_or_unclear")
+        a.deadline = Fact(value="2026-09-30", source_quote="Deadline: 2026-09-30")
+        job = PreparedJob("abc", Path("packet.md"), "synthetic job", a)
+        score, reasons = rank_job(job, CandidateProfile(), date(2026, 10, 3))
+        self.assertEqual(score, -20)
+        self.assertTrue(any("verify live status" in reason for reason in reasons))
+
+    def test_queue_orders_new_jobs_by_score(self):
+        strong = make_analysis("8 months")
+        weak = make_analysis("", "variable_or_unclear")
+        profile = CandidateProfile(preferences=ProfilePreferences(desired_term="8 months"))
+        jobs = [
+            PreparedJob("weak", Path("weak.md"), "synthetic weak", weak),
+            PreparedJob("strong", Path("strong.md"), "synthetic strong", strong),
+        ]
+        with TemporaryDirectory() as directory:
+            content = write_priority_queue(Path(directory), jobs, profile).read_text()
+        self.assertLess(content.index("Job ID: strong"), content.index("Job ID: weak"))
+
+    def test_full_september_name_parses_without_truncation(self):
+        self.assertEqual(
+            quoted_date(Fact(value="September 30, 2026", source_quote="Posted September 30, 2026.")),
+            date(2026, 9, 30),
+        )
 
 
 class ProfileChecks(unittest.TestCase):
@@ -601,6 +752,38 @@ class OutputChecks(unittest.TestCase):
             ):
                 self.assertEqual(main(), 0)
             self.assertEqual(mocked.call_args.args[3], CandidateProfile())
+
+    def test_single_job_rerun_preserves_feedback_and_avoids_model_call(self):
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            argv = [
+                "job_agent.py", "--resume", str(FIXTURES / "synthetic_resume.md"),
+                "--job-file", str(FIXTURES / "job_term_unstated.txt"), "--out", str(output),
+            ]
+            with (
+                patch("sys.argv", argv),
+                patch("job_agent.make_analysis", return_value=make_analysis("")) as analyzed,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(main(), 0)
+            analyzed.assert_called_once()
+            job_id = read_tracker(output / "applications.csv")[0]["job_id"]
+            with (
+                patch("sys.argv", ["job_agent.py", "--feedback-job-id", job_id,
+                                   "--outcome", "applied", "--out", str(output)]),
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(main(), 0)
+            with (
+                patch("sys.argv", argv),
+                patch("job_agent.make_analysis") as analyzed_again,
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(main(), 0)
+            analyzed_again.assert_not_called()
+            rows = read_tracker(output / "applications.csv")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["status"], "applied")
 
 
 if __name__ == "__main__":
