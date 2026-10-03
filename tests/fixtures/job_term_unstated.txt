@@ -1,0 +1,14 @@
+Example Public Services — Junior Data Assistant
+
+Example Public Services is a fictional organization used only for tests. The
+assistant will organize sample files, document field definitions, build simple
+Excel summaries, and review data-quality exceptions with a supervisor.
+
+Location: Kitchener, Ontario. Work mode: Not stated.
+Applications should include a resume and a short paragraph describing relevant
+course or project experience. The posting does not provide a publication date,
+deadline, start date, or placement length.
+
+This is synthetic content. A reachable copy of this fixture does not prove that
+a real application is open, and missing dates or term details must remain
+unknown until a person verifies them with the employer.

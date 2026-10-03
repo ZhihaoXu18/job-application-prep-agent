@@ -1,0 +1,15 @@
+Northstar Analytics — Data Analyst Co-op
+
+Northstar Analytics is a fictional employer used only for automated testing. The
+student will clean sample operational data, write SQL queries, create Power BI
+reports, and explain data-quality findings to a small analytics team.
+
+Location: Toronto, Ontario. Work mode: Hybrid, with two office days each week.
+Work term: January 4 to August 27, 2027 (8 months).
+Application deadline: October 15, 2026 at 5:00 p.m. Eastern.
+Published: September 15, 2026.
+
+Applicants should be enrolled in a Canadian university co-op program and should
+be comfortable with Python, SQL, Excel, and clear written communication. This
+fixture does not establish whether any real job is open and must never be used
+as evidence about a real employer.

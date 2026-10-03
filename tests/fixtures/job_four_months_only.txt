@@ -1,0 +1,13 @@
+Maple Test Labs — Reporting Co-op
+
+Maple Test Labs is a fictional company created for regression tests. The role
+supports a reporting team by reviewing spreadsheet inputs, writing basic SQL,
+and preparing weekly charts from synthetic operational data.
+
+Location: Waterloo, Ontario. Work mode: On-site.
+This is a 4-month internship from January 4 to April 30, 2027.
+Application deadline: October 20, 2026.
+
+Students should be available for the complete stated placement. Experience with
+Excel or a classroom data project is helpful. Nothing in this fixture represents
+a live vacancy, a real deadline, or a real employer's eligibility requirements.

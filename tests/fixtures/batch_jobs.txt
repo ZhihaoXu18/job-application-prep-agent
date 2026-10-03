@@ -1,0 +1,8 @@
+# Synthetic batch manifest. Paths are relative to this file.
+
+job_explicit_eight_months.txt
+job_four_months_only.txt
+
+# A flexible term must remain unconfirmed.
+job_four_or_eight_months.txt
+job_term_unstated.txt

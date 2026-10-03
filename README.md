@@ -17,21 +17,59 @@ export OPENAI_API_KEY="your-key"
 
 Create an API key at [OpenAI Platform](https://platform.openai.com/api-keys). Keep it in an environment variable; do not commit it or your private résumé to GitHub. API usage can incur charges.
 
+Create a private candidate profile from the synthetic example:
+
+```bash
+cp profile.example.json profile.json
+```
+
+Edit `profile.json` so its preferences are yours and every `source_resume_quote` exactly matches text in your supplied résumé. The profile is ignored by Git. Do not add eligibility, experience, skills, or metrics that your résumé does not support.
+
 ## Prepare an application packet
 
 ```bash
-python job_agent.py --resume /path/to/your_resume.pdf --url "https://employer.example/job"
+python job_agent.py \
+  --resume /path/to/your_resume.pdf \
+  --profile profile.json \
+  --url "https://employer.example/job"
 ```
 
 If the employer page is rendered by JavaScript, requires sign-in, or cannot be extracted, save the posting body in `posting.txt` and use:
 
 ```bash
-python job_agent.py --resume /path/to/your_resume.pdf --job-file posting.txt
+python job_agent.py \
+  --resume /path/to/your_resume.pdf \
+  --profile profile.json \
+  --job-file posting.txt
 ```
+
+`--profile` is optional. Without it, the tool uses no assumed role, location, work-mode, or term preferences. With it, duplicate evidence IDs, unknown fields, and evidence quotes missing from the résumé cause a clear error before any model request.
+
+URL input must remain on HTTPS and return HTML. Non-HTML responses, insecure redirects, pages larger than 2 MB, and pages with less than 300 characters of extracted text are rejected with a copy-paste fallback. At most 60,000 extracted characters are sent for analysis.
+
+To prepare several postings sequentially, create a UTF-8 text manifest with one HTTPS URL or local posting path per line. Blank lines and lines beginning with `#` are ignored. Relative paths are resolved from the manifest's directory.
+
+```text
+# jobs.txt
+https://employer.example/jobs/123
+postings/second-role.txt
+/absolute/path/to/third-role.txt
+```
+
+```bash
+python job_agent.py \
+  --resume /path/to/your_resume.pdf \
+  --profile profile.json \
+  --batch-file jobs.txt
+```
+
+Batch processing writes one review packet per successfully prepared source and a shared tracker. A failed source is reported and does not stop later sources; the command exits with status 1 if any source failed. Batch input is processed in manifest order and is not yet deduplicated or ranked.
 
 The script writes a Markdown review packet and `applications.csv` inside `job_agent_output/`. It uses `gpt-6-sol` through the OpenAI Responses API. The model's extracted dates and source quotes are hints for review, not independently verified evidence. Four-month-only and ambiguous terms are explicitly flagged.
 
 The code also checks whether each quoted fact appears in the supplied posting and whether a proposed original résumé bullet appears in the supplied résumé. Unsupported dates are reset to `Not stated`; an unsupported eight-month claim is downgraded to an unclear term. This text check cannot independently confirm that the employer page is current or that a rewrite is truthful.
+
+Additional conservative guardrails reject model output outside the allowed term and priority values. A quoted date, term, location, or work mode is reset to `Not stated` when its extracted value conflicts with the supporting quote. A proposed résumé edit is omitted when it introduces a numeric claim absent from the original bullet. Matching points and application paragraphs cannot introduce numbers absent from the supplied résumé and posting; gaps cannot introduce numeric requirements absent from the posting. Non-numeric wording still requires human review.
 
 Run the offline evidence checks with `python -m unittest -v test_job_agent.py`.
 
@@ -48,7 +86,7 @@ Other values: `rejected`, `no_response`, `offer`. The tracker helps compare actu
 
 ## Current scope
 
-- One posting per command; no automatic job discovery or batch application.
+- Single-posting and sequential batch preparation; no automatic job discovery or batch submission.
 - No automatic submission, account login, PLUM test, or video interview.
 - Text-based PDFs only; scanned résumés need OCR before use.
 - Human review is required for every claim and edit.

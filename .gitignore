@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 .env
 .env.*
+profile*.json
+!profile.example.json
 *.pdf
 *.docx
 posting.txt
