@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/app.css">
   <link rel="stylesheet" href="/packet.css">
   <link rel="stylesheet" href="/review.css">
+  <link rel="stylesheet" href="/direction.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -41,6 +42,19 @@
             <div class="form-block">
               <div class="block-heading"><span class="block-number">2</span><div><h3>候选人偏好 <em>可选</em></h3><p>上传与命令行相同格式的 profile JSON；证据仍需与履历匹配。</p></div></div>
               <label class="file-field" for="profileFile"><span>选择 profile.json</span><input id="profileFile" type="file" accept=".json,application/json"><small id="profileFileName">未提供则不假设偏好</small></label>
+              <div class="direction-start">
+                <div><strong>先从简历探索方向</strong><p>只用简历中的文字给出候选岗位；你修改并确认后才用于新职位分析。</p></div>
+                <button id="suggestDirections" type="button">建议方向</button>
+              </div>
+              <div id="directionPanel" class="direction-panel" hidden>
+                <p class="direction-caution">这只是关键词线索，不是资格判断；不会调用模型、搜索网站或保存简历。</p>
+                <div id="directionResults" class="direction-results" aria-live="polite"></div>
+                <label class="field-label" for="directionRoles">你确认的目标岗位 <span>每行一个，最多 5 个</span></label>
+                <textarea id="directionRoles" rows="3" placeholder="例如 Data Analyst Co-op"></textarea>
+                <button id="confirmDirections" class="direction-confirm" type="button">确认这些方向</button>
+                <div id="directionSearch" class="direction-search" hidden><strong>按确认的方向去找职位</strong><p>点击后会在搜索网站打开新页面，只带你确认的方向文字和“Canada co-op jobs”；不会发送简历。找到职位后，再把雇主链接贴到第 3 步。</p><div id="directionSearchLinks"></div></div>
+              </div>
+              <p id="directionStatus" class="direction-status" role="status">尚未确认方向；也可以直接按原流程准备职位。</p>
             </div>
 
             <div class="form-block last-block">

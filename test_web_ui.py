@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from direction_suggestions import resume_fingerprint
 from job_agent import read_tracker
 from test_job_agent import fixture, make_analysis
 from web_ui import LocalServer, packet_for_row, resume_from_request, review_path
@@ -104,6 +105,9 @@ class LocalHTTPChecks(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"review-editor", stylesheet)
         self.assertIn("text/css", headers["Content-Type"])
+        status, _, stylesheet = self.request("GET", "/direction.css")
+        self.assertEqual(status, 200)
+        self.assertIn(b"direction-panel", stylesheet)
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
             status, _, raw = self.request("GET", "/api/state")
         self.assertEqual(status, 200)
@@ -131,6 +135,41 @@ class LocalHTTPChecks(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn(b"OPENAI_API_KEY", raw)
         fetched.assert_not_called()
+
+    def test_directions_work_without_key_and_confirmed_roles_reach_analysis(self):
+        payload = self.prepare_payload()
+        payload["profile_json"] = (Path(__file__).parent / "profile.example.json").read_text()
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+            status, _, raw = self.request("POST", "/api/directions", payload)
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertEqual(result["resume_fingerprint"], resume_fingerprint(payload["resume_text"]))
+        self.assertIn("Data Analyst Co-op", [item["role"] for item in result["suggestions"]])
+        self.assertEqual(result["current_roles"], ["Data Analyst Co-op", "Business Intelligence Co-op"])
+        self.assertEqual(read_tracker(self.out / "applications.csv"), [])
+
+        payload["confirmed_roles"] = ["Data Operations Co-op"]
+        payload["direction_fingerprint"] = result["resume_fingerprint"]
+        term_quote = "Work term: January 4 to August 27, 2027 (8 months)."
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-test-key"}),
+            patch("job_agent.make_analysis", return_value=make_analysis(term_quote)) as analyzed,
+        ):
+            status, _, _ = self.request("POST", "/api/prepare", payload)
+        self.assertEqual(status, 200)
+        used_profile = analyzed.call_args.args[3]
+        self.assertEqual(used_profile.preferences.target_roles, ["Data Operations Co-op"])
+        self.assertEqual(used_profile.preferences.preferred_locations[0], "Toronto, Ontario")
+
+    def test_stale_direction_confirmation_is_rejected_before_model(self):
+        payload = self.prepare_payload()
+        payload["confirmed_roles"] = ["Data Analyst Co-op"]
+        payload["direction_fingerprint"] = "0" * 64
+        with patch("job_agent.make_analysis") as analyzed:
+            status, _, raw = self.request("POST", "/api/prepare", payload)
+        self.assertEqual(status, 400)
+        self.assertIn(b"Resume changed", raw)
+        analyzed.assert_not_called()
 
     def test_prepare_duplicate_packet_and_manual_status_update(self):
         payload = self.prepare_payload()

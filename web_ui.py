@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from direction_suggestions import apply_confirmed_directions, resume_fingerprint, suggest_directions
 from job_agent import (
     CandidateProfile,
     STATUSES,
@@ -239,9 +240,10 @@ class LocalHandler(BaseHTTPRequestHandler):
             self._json(403, {"error": "Local origin required."})
             return
         parsed = urlsplit(self.path)
-        if parsed.path in {"/", "/app.css", "/packet.css", "/review.css", "/app.js"}:
+        if parsed.path in {"/", "/app.css", "/packet.css", "/review.css", "/direction.css", "/app.js"}:
             filename = {"/": "index.html", "/app.css": "app.css",
                         "/packet.css": "packet.css", "/review.css": "review.css",
+                        "/direction.css": "direction.css",
                         "/app.js": "app.js"}[parsed.path]
             mime = "text/html" if filename.endswith(".html") else (
                 "text/css" if filename.endswith(".css") else "application/javascript"
@@ -293,6 +295,8 @@ class LocalHandler(BaseHTTPRequestHandler):
                 raise ValueError("Request must be a JSON object.")
             if self.path == "/api/prepare":
                 self._prepare(data)
+            elif self.path == "/api/directions":
+                self._directions(data)
             elif self.path == "/api/feedback":
                 self._feedback(data)
             elif self.path == "/api/review":
@@ -310,7 +314,9 @@ class LocalHandler(BaseHTTPRequestHandler):
 
     def _prepare(self, data: dict) -> None:
         resume = resume_from_request(data)
-        profile = profile_from_request(data, resume)
+        profile = apply_confirmed_directions(
+            profile_from_request(data, resume), data, resume
+        )
         source_type = data.get("source_type")
         rows = read_tracker(self.server.out / "applications.csv")
         if source_type == "url":
@@ -366,6 +372,15 @@ class LocalHandler(BaseHTTPRequestHandler):
         self._json(200, {"duplicate": False, "job": public_row(row),
                          "packet": packet_for_row(row, self.server.out),
                          "review": load_review(self.server.out, job.job_id)})
+
+    def _directions(self, data: dict) -> None:
+        resume = resume_from_request(data)
+        profile = profile_from_request(data, resume)
+        self._json(200, {
+            "suggestions": suggest_directions(resume),
+            "current_roles": profile.preferences.target_roles,
+            "resume_fingerprint": resume_fingerprint(resume),
+        })
 
     def _review(self, data: dict) -> None:
         job_id = data.get("job_id")

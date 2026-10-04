@@ -3,6 +3,9 @@ let activeJob = null;
 let activePacket = "";
 let activeReviewRevision = "";
 let reviewDirty = false;
+let directionFingerprint = "";
+let confirmedRoles = null;
+let directionRequestVersion = 0;
 const termLabels = {"8_month_confirmed": "8 个月已确认", "4_month_only": "仅 4 个月", "variable_or_unclear": "任期待确认"};
 const statusLabels = {prepared: "已准备", applied: "已申请", interview: "面试", rejected: "未通过", no_response: "暂无回复", offer: "收到 offer"};
 
@@ -119,6 +122,88 @@ async function encodedFile(file) {
   return {name: file.name, data: btoa(binary)};
 }
 
+async function candidatePayload() {
+  const payload = {
+    resume_text: $("resumeText").value,
+    profile_json: $("profileFile").files[0] ? await $("profileFile").files[0].text() : "",
+  };
+  const file = $("resumeFile").files[0];
+  if (!payload.resume_text.trim() && file) payload.resume_file = await encodedFile(file);
+  return payload;
+}
+
+function invalidateDirections() {
+  directionRequestVersion++;
+  directionFingerprint = "";
+  confirmedRoles = null;
+  $("directionPanel").hidden = true;
+  $("directionSearch").hidden = true;
+  $("directionStatus").textContent = "简历或 profile 已更改；如需使用方向建议，请重新分析并确认。";
+}
+
+async function suggestDirections() {
+  const button = $("suggestDirections");
+  const version = ++directionRequestVersion;
+  button.disabled = true;
+  try {
+    const result = await api("/api/directions", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
+      body: JSON.stringify(await candidatePayload()),
+    });
+    if (version !== directionRequestVersion) return;
+    directionFingerprint = result.resume_fingerprint;
+    confirmedRoles = null;
+    $("directionSearch").hidden = true;
+    const list = $("directionResults");
+    list.replaceChildren();
+    for (const suggestion of result.suggestions) {
+      const item = element("div", "direction-item");
+      item.append(element("strong", "", suggestion.role));
+      for (const quote of suggestion.evidence) item.append(element("small", "", `简历原文：${quote}`));
+      list.append(item);
+    }
+    if (!result.suggestions.length) {
+      list.append(element("p", "direction-empty", "没有足够明确的线索；你仍可手动输入目标岗位。"));
+    }
+    $("directionRoles").value = (result.current_roles.length
+      ? result.current_roles : result.suggestions.map((item) => item.role)).join("\n");
+    $("directionPanel").hidden = false;
+    $("directionStatus").textContent = "方向仅为草案；修改后点击“确认这些方向”才会用于新职位分析。";
+  } catch (error) {
+    if (version === directionRequestVersion) {
+      $("directionStatus").textContent = `无法分析方向：${error.message}`;
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function confirmDirections() {
+  if (!directionFingerprint) return;
+  const roles = $("directionRoles").value.split(/\r?\n/).map((role) => role.trim()).filter(Boolean);
+  if (roles.length > 5 || roles.some((role) => role.length > 100) ||
+      new Set(roles.map((role) => role.toLocaleLowerCase())).size !== roles.length) {
+    $("directionStatus").textContent = "最多确认 5 个不重复的方向，每个方向不超过 100 字符。";
+    return;
+  }
+  confirmedRoles = roles;
+  const search = $("directionSearch");
+  const links = $("directionSearchLinks");
+  links.replaceChildren();
+  for (const role of roles) {
+    const link = element("a", "", `搜索 ${role} ↗`);
+    link.href = `https://www.google.com/search?q=${encodeURIComponent(`${role} Canada co-op jobs`)}`;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    links.append(link);
+  }
+  search.hidden = roles.length === 0;
+  $("directionStatus").textContent = roles.length
+    ? `已确认：${roles.join("、")}。后续新职位分析会使用这些目标方向。`
+    : "已确认不设置目标岗位；后续分析不会假设你的求职方向。";
+}
+
 function generatedDraft(packet) {
   const start = packet.indexOf("## Short application draft");
   if (start < 0) return "";
@@ -231,7 +316,7 @@ async function refreshState() {
   notice.className = `notice ${state.api_key_ready ? "ready" : "missing"}`;
   notice.textContent = state.api_key_ready
     ? "模型密钥已在本地服务中配置。生成新职位审阅包会产生 API 费用。"
-    : "尚未配置 OPENAI_API_KEY。可以浏览已有结果；生成新职位前请在启动服务的终端配置密钥。";
+    : "尚未配置 OPENAI_API_KEY。仍可探索简历方向、浏览已有结果；生成新职位前请在启动服务的终端配置密钥。";
   renderQueue(state.queue);
   renderJobs(state.jobs);
 }
@@ -245,14 +330,15 @@ async function prepare(event) {
   $("feedbackNotice").hidden = true;
   try {
     const payload = {
-      resume_text: $("resumeText").value,
-      profile_json: $("profileFile").files[0] ? await $("profileFile").files[0].text() : "",
+      ...await candidatePayload(),
       source_type: sourceMode(),
       url: $("jobUrl").value,
       posting_text: $("postingText").value,
     };
-    const file = $("resumeFile").files[0];
-    if (!payload.resume_text.trim() && file) payload.resume_file = await encodedFile(file);
+    if (confirmedRoles !== null) {
+      payload.confirmed_roles = confirmedRoles;
+      payload.direction_fingerprint = directionFingerprint;
+    }
     const result = await api("/api/prepare", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
@@ -347,8 +433,16 @@ function downloadReviewed() {
 }
 
 document.querySelectorAll('input[name="sourceType"]').forEach((radio) => radio.addEventListener("change", syncSourceMode));
-$("resumeFile").addEventListener("change", () => $("resumeFileName").textContent = $("resumeFile").files[0]?.name || "尚未选择文件");
-$("profileFile").addEventListener("change", () => $("profileFileName").textContent = $("profileFile").files[0]?.name || "未提供则不假设偏好");
+$("resumeFile").addEventListener("change", () => { $("resumeFileName").textContent = $("resumeFile").files[0]?.name || "尚未选择文件"; invalidateDirections(); });
+$("resumeText").addEventListener("input", invalidateDirections);
+$("profileFile").addEventListener("change", () => { $("profileFileName").textContent = $("profileFile").files[0]?.name || "未提供则不假设偏好"; invalidateDirections(); });
+$("suggestDirections").addEventListener("click", suggestDirections);
+$("confirmDirections").addEventListener("click", confirmDirections);
+$("directionRoles").addEventListener("input", () => {
+  confirmedRoles = null;
+  $("directionSearch").hidden = true;
+  $("directionStatus").textContent = "方向有未确认的修改；请再次点击“确认这些方向”。";
+});
 $("prepareForm").addEventListener("submit", prepare);
 $("saveStatus").addEventListener("click", saveStatus);
 $("saveReview").addEventListener("click", saveReview);
