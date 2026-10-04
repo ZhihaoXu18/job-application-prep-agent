@@ -2,7 +2,7 @@
 
 See [the eight-week roadmap](ROADMAP.md) for the project milestones. `AGENTS.md` gives Codex the repository's factuality and privacy boundaries.
 
-A small, local Python tool that prepares a review packet for one Canadian data internship posting. It reads a text-based résumé PDF and either an employer job URL or a copied posting. It extracts stated dates and term length, identifies fit and gaps, proposes factual résumé bullet edits, drafts a short application paragraph, and records the job in a CSV tracker.
+A small, local Python tool with a browser review interface. It prepares a review packet for a Canadian data internship posting from a text-based résumé PDF and either an employer job URL or a copied posting. It extracts stated dates and term length, identifies fit and gaps, proposes factual résumé bullet edits, drafts a short application paragraph, and records the job in a CSV tracker.
 
 The packet is **not an application**. Check all facts against the live employer posting, complete required assessments, and submit the application yourself. A reachable page does not prove that the role is still open. The tool does not search for new jobs or log in to applicant systems.
 
@@ -16,6 +16,18 @@ export OPENAI_API_KEY="your-key"
 ```
 
 Create an API key at [OpenAI Platform](https://platform.openai.com/api-keys). Keep it in an environment variable; do not commit it or your private résumé to GitHub. API usage can incur charges.
+
+## Local web interface
+
+Start the browser interface from the repository directory:
+
+```bash
+python web_ui.py
+```
+
+Open [http://127.0.0.1:8765/](http://127.0.0.1:8765/) on the same computer. The server binds only to `127.0.0.1`; stop it with Ctrl+C. You can select a text-based PDF/TXT/Markdown résumé or paste résumé text, optionally upload your validated `profile.json`, then enter one HTTPS employer URL or paste a posting. The page shows the resulting review packet and existing tracker rows, lets you download a Markdown copy, and lets you record a status *after* you take the corresponding action yourself. It also displays the most recent CLI batch queue if one exists in the selected output directory.
+
+The browser page works without an API key for viewing existing packets. To prepare a new job, set `OPENAI_API_KEY` in the terminal before starting the server; the new request may incur a charge. Uploaded résumé bytes are parsed in memory; generated packets and the tracker are saved locally under `job_agent_output/` (ignored by Git). Do not expose the local server through a public tunnel or put private output in a tracked directory. This first interface handles one job at a time; use the CLI `--batch-file` workflow for batch preparation. See [Day 8 implementation notes](docs/day-8-local-web-ui.md).
 
 Create a private candidate profile from the synthetic example:
 
@@ -73,7 +85,7 @@ The code also checks whether each quoted fact appears in the supplied posting an
 
 Additional conservative guardrails reject model output outside the allowed term and priority values. A quoted date, term, location, or work mode is reset to `Not stated` when its extracted value conflicts with the supporting quote. A proposed résumé edit is omitted when it introduces a numeric claim absent from the original bullet. Matching points and application paragraphs cannot introduce numbers absent from the supplied résumé and posting; gaps cannot introduce numeric requirements absent from the posting. Non-numeric wording still requires human review.
 
-Run the offline evidence checks with `python -m unittest -v test_job_agent.py`.
+Run the offline evidence and web checks with `python -m unittest -v test_job_agent.py test_web_ui.py`. The web tests use a local loopback port but do not contact an employer site or make paid API requests.
 
 ## Record outcomes
 
@@ -88,7 +100,7 @@ Other values: `rejected`, `no_response`, `offer`. The tracker helps compare actu
 
 ## Current scope
 
-- Single-posting and deduplicated batch preparation; no automatic job discovery or batch submission.
+- Single-posting browser preparation and deduplicated CLI batch preparation; no automatic job discovery or batch submission.
 - No automatic submission, account login, PLUM test, or video interview.
 - Text-based PDFs only; scanned résumés need OCR before use.
 - Human review is required for every claim and edit.

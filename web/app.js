@@ -1,0 +1,259 @@
+const $ = (id) => document.getElementById(id);
+let activeJob = null;
+let activePacket = "";
+const termLabels = {"8_month_confirmed": "8 个月已确认", "4_month_only": "仅 4 个月", "variable_or_unclear": "任期待确认"};
+const statusLabels = {prepared: "已准备", applied: "已申请", interview: "面试", rejected: "未通过", no_response: "暂无回复", offer: "收到 offer"};
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function showNotice(message, error = false) {
+  const node = $("feedbackNotice");
+  node.textContent = message;
+  node.classList.toggle("error", error);
+  node.hidden = false;
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, options);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
+  return body;
+}
+
+function sourceMode() {
+  return document.querySelector('input[name="sourceType"]:checked').value;
+}
+
+function syncSourceMode() {
+  const mode = sourceMode();
+  $("urlFields").hidden = mode !== "url";
+  $("textFields").hidden = mode !== "text";
+}
+
+function appendInline(node, text) {
+  text.split("**").forEach((part, index) => {
+    if (index % 2) node.append(element("strong", "", part));
+    else node.append(document.createTextNode(part));
+  });
+}
+
+function tableCells(line) {
+  return line.replaceAll("\\|", "\uE000").split("|").slice(1, -1)
+    .map((cell) => cell.replaceAll("\uE000", "|").trim());
+}
+
+function renderPacket(markdown) {
+  const root = $("packetText");
+  root.replaceChildren();
+  const lines = markdown.split(/\r?\n/);
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) { index++; continue; }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const node = element(heading[1].length === 1 ? "h3" : heading[1].length === 2 ? "h4" : "h5", "");
+      appendInline(node, heading[2]);
+      root.append(node);
+      index++;
+      continue;
+    }
+    if (line.startsWith("|") && /^\|[\s:|-]+\|$/.test((lines[index + 1] || "").trim())) {
+      const table = element("table", "");
+      const head = element("thead", "");
+      const headerRow = element("tr", "");
+      for (const cell of tableCells(line)) headerRow.append(element("th", "", cell));
+      head.append(headerRow);
+      table.append(head);
+      const body = element("tbody", "");
+      index += 2;
+      while (index < lines.length && lines[index].trim().startsWith("|")) {
+        const row = element("tr", "");
+        for (const cell of tableCells(lines[index].trim())) row.append(element("td", "", cell));
+        body.append(row);
+        index++;
+      }
+      table.append(body);
+      root.append(table);
+      continue;
+    }
+    if (line.startsWith("- ")) {
+      const list = element("ul", "");
+      while (index < lines.length && lines[index].trim().startsWith("- ")) {
+        const item = element("li", "");
+        appendInline(item, lines[index].trim().slice(2));
+        list.append(item);
+        index++;
+      }
+      root.append(list);
+      continue;
+    }
+    const paragraph = element("p", "");
+    const parts = [];
+    while (index < lines.length && lines[index].trim() &&
+      !/^(#{1,3}\s|\|\s|-\s)/.test(lines[index].trim())) {
+      parts.push(lines[index].trim());
+      index++;
+    }
+    if (!parts.length) { index++; continue; }
+    appendInline(paragraph, parts.join(" "));
+    root.append(paragraph);
+  }
+}
+
+async function encodedFile(file) {
+  if (file.size > 2500000) throw new Error("履历文件超过 2.5 MB 限制。");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunk = 16384;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return {name: file.name, data: btoa(binary)};
+}
+
+function showPacket(job, packet, duplicate = false) {
+  activeJob = job;
+  activePacket = packet;
+  $("emptyResult").hidden = true;
+  $("result").hidden = false;
+  $("resultTitle").textContent = `${job.title || "未注明职位"} — ${job.employer || "未注明雇主"}`;
+  $("resultMeta").textContent = `Job ID: ${job.job_id} · ${job.prepared_at || ""}`;
+  $("resultBadge").textContent = duplicate ? "已在 tracker 中 · 未重复分析" : "准备完成 · 尚未提交";
+  renderPacket(packet);
+  $("statusSelect").value = job.status || "prepared";
+  $("result").scrollIntoView({behavior: "smooth", block: "start"});
+}
+
+function renderQueue(markdown) {
+  const list = $("queueList");
+  list.replaceChildren();
+  const sections = markdown.split(/^## /m).slice(1);
+  if (!sections.length) {
+    list.append(element("div", "muted-empty", "暂无批次队列。先用命令行批量准备职位，或在上方准备单个职位。"));
+    return;
+  }
+  for (const section of sections) {
+    const lines = section.trim().split("\n");
+    const title = lines[0].replace(/^\d+\.\s*/, "");
+    const score = (section.match(/^- Review score: (-?\d+)/m) || ["", "0"])[1];
+    const term = (section.match(/^- Term: ([^\n]+)/m) || ["", "unknown"])[1];
+    const item = element("div", "queue-item");
+    item.append(element("span", "queue-rank", String(list.children.length + 1).padStart(2, "0")));
+    const main = element("div", "queue-main");
+    main.append(element("strong", "", title), element("small", "", `任期：${termLabels[term] || "未注明"}`));
+    item.append(main, element("span", "queue-score", `${score} 分`));
+    list.append(item);
+  }
+}
+
+function renderJobs(jobs) {
+  const list = $("jobList");
+  list.replaceChildren();
+  $("jobCount").textContent = String(jobs.length);
+  if (!jobs.length) {
+    list.append(element("div", "muted-empty", "还没有职位记录。"));
+    return;
+  }
+  for (const job of jobs) {
+    const button = element("button", "job-item");
+    button.type = "button";
+    const main = element("div", "job-main");
+    main.append(element("strong", "", `${job.title || "未注明职位"} — ${job.employer || "未注明雇主"}`), element("small", "", `ID ${job.job_id}`));
+    button.append(main, element("span", "job-status", statusLabels[job.status] || job.status || "已准备"));
+    button.addEventListener("click", async () => {
+      try {
+        const result = await api(`/api/packet?id=${encodeURIComponent(job.job_id)}`);
+        showPacket(result.job, result.packet, true);
+      } catch (error) {
+        showNotice(error.message, true);
+      }
+    });
+    list.append(button);
+  }
+}
+
+async function refreshState() {
+  const state = await api("/api/state");
+  const notice = $("keyNotice");
+  notice.className = `notice ${state.api_key_ready ? "ready" : "missing"}`;
+  notice.textContent = state.api_key_ready
+    ? "模型密钥已在本地服务中配置。生成新职位审阅包会产生 API 费用。"
+    : "尚未配置 OPENAI_API_KEY。可以浏览已有结果；生成新职位前请在启动服务的终端配置密钥。";
+  renderQueue(state.queue);
+  renderJobs(state.jobs);
+}
+
+async function prepare(event) {
+  event.preventDefault();
+  const button = $("prepareButton");
+  button.disabled = true;
+  button.firstElementChild.textContent = "正在准备，请稍候…";
+  $("feedbackNotice").hidden = true;
+  try {
+    const payload = {
+      resume_text: $("resumeText").value,
+      profile_json: $("profileFile").files[0] ? await $("profileFile").files[0].text() : "",
+      source_type: sourceMode(),
+      url: $("jobUrl").value,
+      posting_text: $("postingText").value,
+    };
+    const file = $("resumeFile").files[0];
+    if (!payload.resume_text.trim() && file) payload.resume_file = await encodedFile(file);
+    const result = await api("/api/prepare", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
+      body: JSON.stringify(payload),
+    });
+    showPacket(result.job, result.packet, result.duplicate);
+    showNotice(result.duplicate ? "这个职位已在 tracker 中，已打开原有审阅包；没有再次调用模型。" : "审阅包已生成。请逐项核对原始职位页面与履历事实。");
+    await refreshState();
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.firstElementChild.textContent = "生成审阅包";
+  }
+}
+
+async function saveStatus() {
+  if (!activeJob) return;
+  const status = $("statusSelect").value;
+  try {
+    const result = await api("/api/feedback", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
+      body: JSON.stringify({job_id: activeJob.job_id, status}),
+    });
+    activeJob = result.job;
+    showNotice("本地 tracker 已更新。此操作没有向雇主发送申请。");
+    await refreshState();
+  } catch (error) {
+    showNotice(error.message, true);
+  }
+}
+
+function downloadPacket() {
+  if (!activePacket || !activeJob) return;
+  const blob = new Blob([activePacket], {type: "text/markdown;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${activeJob.job_id}-review.md`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+document.querySelectorAll('input[name="sourceType"]').forEach((radio) => radio.addEventListener("change", syncSourceMode));
+$("resumeFile").addEventListener("change", () => $("resumeFileName").textContent = $("resumeFile").files[0]?.name || "尚未选择文件");
+$("profileFile").addEventListener("change", () => $("profileFileName").textContent = $("profileFile").files[0]?.name || "未提供则不假设偏好");
+$("prepareForm").addEventListener("submit", prepare);
+$("saveStatus").addEventListener("click", saveStatus);
+$("downloadPacket").addEventListener("click", downloadPacket);
+syncSourceMode();
+refreshState().catch((error) => showNotice(error.message, true));

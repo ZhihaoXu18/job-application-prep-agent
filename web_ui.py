@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Local-only browser review UI for the job preparation workflow."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import json
+import os
+import re
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+from job_agent import (
+    CandidateProfile,
+    STATUSES,
+    already_tracked,
+    fetch_job,
+    job_id_for_source,
+    now_toronto,
+    posting_fingerprint,
+    prepare_job,
+    read_resume_bytes,
+    read_tracker,
+    validate_profile,
+    write_tracker,
+)
+
+
+WEB_DIR = Path(__file__).parent / "web"
+MAX_REQUEST_BYTES = 4_000_000
+MAX_RESUME_BYTES = 2_500_000
+MAX_RESUME_CHARS = 80_000
+MAX_POSTING_CHARS = 60_000
+JOB_ID_PATTERN = re.compile(r"[0-9a-f]{12}\Z")
+
+
+def resume_from_request(data: dict) -> str:
+    pasted = data.get("resume_text", "")
+    if not isinstance(pasted, str):
+        raise ValueError("Resume text must be a string.")
+    if pasted.strip():
+        resume = pasted
+    else:
+        uploaded = data.get("resume_file")
+        if not isinstance(uploaded, dict):
+            raise ValueError("Paste a resume or select a text-based PDF, .txt, or .md file.")
+        name, encoded = uploaded.get("name"), uploaded.get("data")
+        if not isinstance(name, str) or not isinstance(encoded, str) or len(name) > 200:
+            raise ValueError("Invalid resume upload.")
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except binascii.Error as exc:
+            raise ValueError("Resume upload could not be decoded.") from exc
+        if len(raw) > MAX_RESUME_BYTES:
+            raise ValueError("Resume upload exceeds the 2.5 MB limit.")
+        try:
+            resume = read_resume_bytes(raw, Path(name).suffix)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError("Resume file could not be extracted; use a text-based PDF or text file.") from exc
+    if len(resume.strip()) < 150:
+        raise ValueError("Resume text is too short or could not be extracted.")
+    if len(resume) > MAX_RESUME_CHARS:
+        raise ValueError("Resume text exceeds the 80,000-character limit.")
+    return resume
+
+
+def profile_from_request(data: dict, resume: str) -> CandidateProfile:
+    raw = data.get("profile_json", "")
+    if not isinstance(raw, str) or len(raw) > 30_000:
+        raise ValueError("Profile JSON is invalid or too large.")
+    if not raw.strip():
+        return CandidateProfile()
+    try:
+        return validate_profile(json.loads(raw), resume)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Profile JSON could not be parsed: {exc.msg}") from exc
+
+
+def public_row(row: dict[str, str]) -> dict[str, str]:
+    return {key: row.get(key, "") for key in (
+        "job_id", "employer", "title", "url", "prepared_at", "status", "outcome_at"
+    )}
+
+
+def tracked_row(rows: list[dict[str, str]], job_id: str, url: str | None, posting: str = "") -> dict[str, str] | None:
+    fingerprint = posting_fingerprint(posting) if posting else None
+    return next(
+        (row for row in rows if already_tracked([row], job_id, url, fingerprint)), None
+    )
+
+
+def packet_for_row(row: dict[str, str], out: Path) -> str:
+    packet = Path(row.get("packet", ""))
+    if not packet.is_absolute():
+        packet = Path.cwd() / packet
+    packet = packet.resolve()
+    try:
+        packet.relative_to(out.resolve())
+    except ValueError as exc:
+        raise ValueError("Packet path is outside the selected output directory.") from exc
+    if packet.suffix != ".md" or not packet.is_file():
+        raise ValueError("Packet file is missing or invalid.")
+    return packet.read_text(encoding="utf-8")
+
+
+class LocalServer(HTTPServer):
+    def __init__(self, port: int, out: Path):
+        self.out = out.resolve()
+        super().__init__(("127.0.0.1", port), LocalHandler)
+
+
+class LocalHandler(BaseHTTPRequestHandler):
+    server: LocalServer
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        # Request bodies and private filenames should not enter terminal logs.
+        pass
+
+    def _send(self, status: int, content_type: str, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+        )
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, status: int, payload: dict) -> None:
+        self._send(status, "application/json; charset=utf-8", json.dumps(payload).encode("utf-8"))
+
+    def _same_origin(self) -> bool:
+        expected = f"127.0.0.1:{self.server.server_port}"
+        origin = self.headers.get("Origin")
+        return self.headers.get("Host") == expected and (
+            origin is None or origin == f"http://{expected}"
+        )
+
+    def do_GET(self) -> None:
+        if not self._same_origin():
+            self._json(403, {"error": "Local origin required."})
+            return
+        parsed = urlsplit(self.path)
+        if parsed.path in {"/", "/app.css", "/packet.css", "/app.js"}:
+            filename = {"/": "index.html", "/app.css": "app.css",
+                        "/packet.css": "packet.css", "/app.js": "app.js"}[parsed.path]
+            mime = "text/html" if filename.endswith(".html") else (
+                "text/css" if filename.endswith(".css") else "application/javascript"
+            )
+            self._send(200, f"{mime}; charset=utf-8", (WEB_DIR / filename).read_bytes())
+            return
+        if parsed.path == "/api/state":
+            rows = read_tracker(self.server.out / "applications.csv")
+            queue = self.server.out / "priority_queue.md"
+            self._json(200, {
+                "jobs": [public_row(row) for row in reversed(rows)],
+                "queue": queue.read_text(encoding="utf-8") if queue.is_file() else "",
+                "api_key_ready": bool(os.getenv("OPENAI_API_KEY")),
+            })
+            return
+        if parsed.path == "/api/packet":
+            job_id = parse_qs(parsed.query).get("id", [""])[0]
+            if not JOB_ID_PATTERN.fullmatch(job_id):
+                self._json(400, {"error": "Invalid job ID."})
+                return
+            row = next((r for r in read_tracker(self.server.out / "applications.csv")
+                        if r.get("job_id") == job_id), None)
+            if row is None:
+                self._json(404, {"error": "Job not found."})
+                return
+            try:
+                self._json(200, {"job": public_row(row), "packet": packet_for_row(row, self.server.out)})
+            except (OSError, ValueError) as exc:
+                self._json(400, {"error": str(exc)})
+            return
+        self._json(404, {"error": "Not found."})
+
+    def do_POST(self) -> None:
+        if not self._same_origin() or self.headers.get("X-Job-Agent") != "local-ui":
+            self._json(403, {"error": "Local UI request required."})
+            return
+        if self.headers.get("Content-Type", "").partition(";")[0].strip() != "application/json":
+            self._json(415, {"error": "JSON request required."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_REQUEST_BYTES:
+                raise ValueError("Request is empty or exceeds the 4 MB limit.")
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("Request must be a JSON object.")
+            if self.path == "/api/prepare":
+                self._prepare(data)
+            elif self.path == "/api/feedback":
+                self._feedback(data)
+            else:
+                self._json(404, {"error": "Not found."})
+        except (ValueError, UnicodeError, OSError) as exc:
+            self._json(400, {"error": str(exc)})
+        except Exception as exc:
+            # Model/network failures should reach the browser as an error, not a dropped connection.
+            message = str(exc).replace(os.getenv("OPENAI_API_KEY") or "\0", "[redacted]")
+            self._json(502, {"error": f"Preparation failed: {message[:500]}"})
+
+    def _prepare(self, data: dict) -> None:
+        resume = resume_from_request(data)
+        profile = profile_from_request(data, resume)
+        source_type = data.get("source_type")
+        rows = read_tracker(self.server.out / "applications.csv")
+        if source_type == "url":
+            url = data.get("url")
+            if not isinstance(url, str) or not 0 < len(url) <= 2048:
+                raise ValueError("Enter one HTTPS job URL.")
+            url = url.strip()
+            parts = urlsplit(url)
+            if parts.scheme != "https" or not parts.netloc:
+                raise ValueError("Use an HTTPS employer posting URL.")
+            existing = tracked_row(rows, job_id_for_source(url), url)
+            if existing:
+                self._json(200, {"duplicate": True, "job": public_row(existing),
+                                 "packet": packet_for_row(existing, self.server.out)})
+                return
+            if not os.getenv("OPENAI_API_KEY"):
+                raise ValueError("Set OPENAI_API_KEY in the server terminal before preparing a new job.")
+            posting, source = fetch_job(url), url
+        elif source_type == "text":
+            posting = data.get("posting_text")
+            if not isinstance(posting, str) or len(posting.strip()) < 300:
+                raise ValueError("Paste at least 300 characters of the employer posting.")
+            if len(posting) > MAX_POSTING_CHARS:
+                raise ValueError("Posting exceeds the 60,000-character limit.")
+            url, source = None, "Pasted posting"
+            existing = tracked_row(rows, job_id_for_source(None, posting), None, posting)
+            if existing:
+                self._json(200, {"duplicate": True, "job": public_row(existing),
+                                 "packet": packet_for_row(existing, self.server.out)})
+                return
+            if not os.getenv("OPENAI_API_KEY"):
+                raise ValueError("Set OPENAI_API_KEY in the server terminal before preparing a new job.")
+        else:
+            raise ValueError("Choose a job URL or pasted posting text.")
+
+        job = prepare_job(resume, profile, posting, source, url, self.server.out)
+        if job is None:
+            existing = tracked_row(
+                read_tracker(self.server.out / "applications.csv"),
+                job_id_for_source(url, posting), url, posting,
+            )
+            if existing is None:
+                raise ValueError("The job was skipped but its tracker row was not found.")
+            self._json(200, {"duplicate": True, "job": public_row(existing),
+                             "packet": packet_for_row(existing, self.server.out)})
+            return
+        row = tracked_row(read_tracker(self.server.out / "applications.csv"), job.job_id, url)
+        if row is None:
+            raise ValueError("Prepared job was not found in the tracker.")
+        self._json(200, {"duplicate": False, "job": public_row(row),
+                         "packet": packet_for_row(row, self.server.out)})
+
+    def _feedback(self, data: dict) -> None:
+        job_id, status = data.get("job_id"), data.get("status")
+        if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
+            raise ValueError("Invalid job ID.")
+        if status not in STATUSES:
+            raise ValueError("Invalid application status.")
+        tracker = self.server.out / "applications.csv"
+        rows = read_tracker(tracker)
+        row = next((item for item in rows if item.get("job_id") == job_id), None)
+        if row is None:
+            raise ValueError("Job ID not found in tracker.")
+        row["status"] = status
+        row["outcome_at"] = now_toronto()
+        write_tracker(tracker, rows)
+        self._json(200, {"job": public_row(row)})
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the local browser review interface.")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--out", type=Path, default=Path("job_agent_output"))
+    args = parser.parse_args()
+    if not 0 <= args.port <= 65535:
+        parser.error("Port must be between 0 and 65535.")
+    server = LocalServer(args.port, args.out)
+    print(f"Local UI: http://127.0.0.1:{server.server_port}/")
+    print(f"Output directory: {server.out}")
+    print("Press Ctrl+C to stop. Do not expose this server through a public tunnel.")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

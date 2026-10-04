@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import io
 import json
 import re
 import sys
@@ -111,12 +112,17 @@ def now_toronto() -> str:
 
 
 def read_resume(path: Path) -> str:
-    if path.suffix.lower() == ".pdf":
+    return read_resume_bytes(path.read_bytes(), path.suffix)
+
+
+def read_resume_bytes(data: bytes, suffix: str) -> str:
+    """Extract a resume without persisting browser-uploaded private bytes."""
+    if suffix.lower() == ".pdf":
         from pypdf import PdfReader
 
-        text = "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
-    elif path.suffix.lower() in (".txt", ".md"):
-        text = path.read_text(encoding="utf-8")
+        text = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages)
+    elif suffix.lower() in (".txt", ".md"):
+        text = data.decode("utf-8")
     else:
         raise ValueError("Resume must be a text-based PDF, .txt, or .md file.")
     if len(text.strip()) < 150:
@@ -132,8 +138,17 @@ def read_profile(path: Path | None, resume: str) -> CandidateProfile:
         raise ValueError("Profile must be a JSON file.")
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Profile could not be read or validated: {exc}") from exc
+
+    return validate_profile(raw, resume)
+
+
+def validate_profile(raw: object, resume: str) -> CandidateProfile:
+    """Validate browser or file profile against the supplied resume."""
+    try:
         profile = CandidateProfile.model_validate(raw)
-    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+    except ValidationError as exc:
         raise ValueError(f"Profile could not be read or validated: {exc}") from exc
 
     resume_text = normalized(resume)

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Co-op Prep · 本地审阅台</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/packet.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">C</span><span>Co-op Prep</span></div>
+      <div class="topbar-right"><span class="local-dot"></span> 仅在本机运行 <span class="topbar-divider"></span> 不会自动投递</div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="eyebrow">JOB APPLICATION WORKSPACE <span>·</span> LOCAL PREVIEW</div>
+        <h1>把职位信息变成<br><span>可核对的申请准备材料。</span></h1>
+        <p>上传履历、提供雇主职位页面或粘贴正文。系统生成带来源引句的审阅包；事实、日期和最终申请都由你确认。</p>
+        <div class="hero-pills"><span>01 输入资料</span><span>02 核对证据</span><span>03 自行提交</span></div>
+      </section>
+
+      <div id="keyNotice" class="notice" role="status"></div>
+
+      <div class="workspace-grid">
+        <section class="panel input-panel" aria-labelledby="prepareTitle">
+          <div class="panel-heading"><div><span class="step-label">01 / PREPARE</span><h2 id="prepareTitle">准备一个职位</h2></div><span class="panel-icon">↗</span></div>
+          <form id="prepareForm">
+            <div class="form-block">
+              <div class="block-heading"><span class="block-number">1</span><div><h3>你的履历</h3><p>支持文本型 PDF、TXT、Markdown，或直接粘贴文字。</p></div></div>
+              <label class="file-field" for="resumeFile"><span>选择履历文件</span><input id="resumeFile" type="file" accept=".pdf,.txt,.md"><small id="resumeFileName">尚未选择文件</small></label>
+              <label class="field-label" for="resumeText">或粘贴履历文字 <span>粘贴内容优先</span></label>
+              <textarea id="resumeText" rows="4" placeholder="在这里粘贴履历正文……"></textarea>
+            </div>
+
+            <div class="form-block">
+              <div class="block-heading"><span class="block-number">2</span><div><h3>候选人偏好 <em>可选</em></h3><p>上传与命令行相同格式的 profile JSON；证据仍需与履历匹配。</p></div></div>
+              <label class="file-field" for="profileFile"><span>选择 profile.json</span><input id="profileFile" type="file" accept=".json,application/json"><small id="profileFileName">未提供则不假设偏好</small></label>
+            </div>
+
+            <div class="form-block last-block">
+              <div class="block-heading"><span class="block-number">3</span><div><h3>职位信息</h3><p>选择 HTTPS 链接，或粘贴完整职位正文。</p></div></div>
+              <div class="segmented" role="radiogroup" aria-label="职位输入方式">
+                <label><input type="radio" name="sourceType" value="url" checked><span>职位链接</span></label>
+                <label><input type="radio" name="sourceType" value="text"><span>粘贴正文</span></label>
+              </div>
+              <div id="urlFields"><label class="field-label" for="jobUrl">雇主职位页面</label><input id="jobUrl" type="url" placeholder="https://employer.example/jobs/123"></div>
+              <div id="textFields" hidden><label class="field-label" for="postingText">职位正文 <span>至少 300 字符</span></label><textarea id="postingText" rows="8" placeholder="粘贴雇主发布的完整职位内容……"></textarea></div>
+            </div>
+            <button id="prepareButton" class="primary-button" type="submit"><span>生成审阅包</span><span aria-hidden="true">→</span></button>
+            <p class="cost-note">新职位会调用 OpenAI API，可能产生费用；重复职位会跳过。履历与职位内容只发送给你配置的模型服务，不会提交给招聘网站。</p>
+          </form>
+        </section>
+
+        <section class="panel review-panel" aria-labelledby="reviewTitle">
+          <div class="panel-heading"><div><span class="step-label">02 / REVIEW</span><h2 id="reviewTitle">审阅结果</h2></div><span class="panel-icon">◎</span></div>
+          <div id="feedbackNotice" class="feedback-notice" role="status" hidden></div>
+          <div id="emptyResult" class="empty-result"><div class="empty-glyph">▤</div><h3>材料会显示在这里</h3><p>左侧准备一个职位，或从下方打开已有记录。每项内容都需要你对照原始职位页面核查。</p></div>
+          <div id="result" hidden>
+            <div class="result-summary"><span id="resultBadge" class="result-badge">仅供审阅</span><h3 id="resultTitle"></h3><p id="resultMeta"></p></div>
+            <div class="packet-toolbar"><span>审阅包 · Markdown</span><button id="downloadPacket" type="button">下载副本 ↓</button></div>
+            <div id="packetText" class="packet-content" role="region" aria-label="职位审阅包"></div>
+            <div class="status-box"><div><strong>记录进展</strong><p>只更新本地 tracker；不会向雇主发送任何内容。</p></div><div class="status-actions"><select id="statusSelect" aria-label="申请状态"><option value="prepared">已准备</option><option value="applied">我已自行申请</option><option value="interview">面试</option><option value="rejected">未通过</option><option value="no_response">暂无回复</option><option value="offer">收到 offer</option></select><button id="saveStatus" type="button">保存</button></div></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="lower-grid">
+        <section class="panel queue-panel" aria-labelledby="queueTitle"><div class="panel-heading compact"><div><span class="step-label">03 / PRIORITIZE</span><h2 id="queueTitle">批次优先队列</h2></div></div><p class="section-intro">显示命令行最近一次批量处理的新职位；分数只用于安排人工审阅顺序。</p><div id="queueList" class="queue-list"></div></section>
+        <section class="panel history-panel" aria-labelledby="historyTitle"><div class="panel-heading compact"><div><span class="step-label">04 / TRACK</span><h2 id="historyTitle">已有职位</h2></div><span id="jobCount" class="count-badge">0</span></div><p class="section-intro">点击职位可以重新查看审阅包，不会再次调用模型。</p><div id="jobList" class="job-list"></div></section>
+      </div>
+    </main>
+
+    <footer>Co-op Prep · 本地原型 <span>·</span> 生成材料不是申请；请核对证据、开放状态和资格后自行提交。</footer>
+  </div>
+</body>
+</html>
