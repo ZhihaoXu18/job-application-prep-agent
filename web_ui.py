@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import hashlib
 import json
 import os
 import re
+import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -35,6 +37,12 @@ MAX_RESUME_BYTES = 2_500_000
 MAX_RESUME_CHARS = 80_000
 MAX_POSTING_CHARS = 60_000
 JOB_ID_PATTERN = re.compile(r"[0-9a-f]{12}\Z")
+REVISION_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+REVIEW_CHECKS = ("posting_status", "term_and_dates", "resume_and_draft")
+
+
+class ReviewConflict(Exception):
+    """The browser is trying to overwrite a newer local review."""
 
 
 def resume_from_request(data: dict) -> str:
@@ -108,6 +116,85 @@ def packet_for_row(row: dict[str, str], out: Path) -> str:
     return packet.read_text(encoding="utf-8")
 
 
+def review_path(out: Path, job_id: str) -> Path:
+    if not JOB_ID_PATTERN.fullmatch(job_id):
+        raise ValueError("Invalid job ID.")
+    directory = out / "reviews"
+    path = directory / f"{job_id}.json"
+    if directory.is_symlink() or path.is_symlink():
+        raise ValueError("Review path cannot be a symbolic link.")
+    return path
+
+
+def empty_review() -> dict:
+    return {
+        "saved": False, "draft": None, "notes": "",
+        "checks": {name: False for name in REVIEW_CHECKS},
+        "saved_at": "", "revision": "",
+    }
+
+
+def validate_review_fields(data: dict) -> tuple[str, str, dict[str, bool]]:
+    draft, notes, checks = data.get("draft"), data.get("notes"), data.get("checks")
+    if not isinstance(draft, str) or len(draft) > 5_000:
+        raise ValueError("Edited application paragraph must be at most 5,000 characters.")
+    if not isinstance(notes, str) or len(notes) > 10_000:
+        raise ValueError("Review notes must be at most 10,000 characters.")
+    if not isinstance(checks, dict) or set(checks) != set(REVIEW_CHECKS) or any(
+        type(checks[name]) is not bool for name in REVIEW_CHECKS
+    ):
+        raise ValueError("Review checklist must contain three true/false values.")
+    return draft, notes, checks
+
+
+def load_review(out: Path, job_id: str) -> dict:
+    path = review_path(out, job_id)
+    if not path.exists():
+        return empty_review()
+    if path.stat().st_size > 100_000:
+        raise ValueError("Saved review is too large; it was not overwritten.")
+    raw = path.read_bytes()
+    stored = json.loads(raw)
+    if not isinstance(stored, dict):
+        raise ValueError("Saved review is invalid; it was not overwritten.")
+    draft, notes, checks = validate_review_fields(stored)
+    saved_at = stored.get("saved_at")
+    if not isinstance(saved_at, str):
+        raise ValueError("Saved review is invalid; it was not overwritten.")
+    return {
+        "saved": True, "draft": draft, "notes": notes, "checks": checks,
+        "saved_at": saved_at, "revision": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def save_review(out: Path, job_id: str, data: dict) -> dict:
+    draft, notes, checks = validate_review_fields(data)
+    base_revision = data.get("base_revision")
+    if not isinstance(base_revision, str) or (
+        base_revision and not REVISION_PATTERN.fullmatch(base_revision)
+    ):
+        raise ValueError("Invalid review revision.")
+    current = load_review(out, job_id)
+    if current["revision"] != base_revision:
+        raise ReviewConflict("This review changed in another tab. Reopen the job before saving.")
+    path = review_path(out, job_id)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    payload = {
+        "draft": draft, "notes": notes, "checks": checks,
+        "saved_at": now_toronto(),
+    }
+    encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{job_id}-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return load_review(out, job_id)
+
+
 class LocalServer(HTTPServer):
     def __init__(self, port: int, out: Path):
         self.out = out.resolve()
@@ -152,9 +239,10 @@ class LocalHandler(BaseHTTPRequestHandler):
             self._json(403, {"error": "Local origin required."})
             return
         parsed = urlsplit(self.path)
-        if parsed.path in {"/", "/app.css", "/packet.css", "/app.js"}:
+        if parsed.path in {"/", "/app.css", "/packet.css", "/review.css", "/app.js"}:
             filename = {"/": "index.html", "/app.css": "app.css",
-                        "/packet.css": "packet.css", "/app.js": "app.js"}[parsed.path]
+                        "/packet.css": "packet.css", "/review.css": "review.css",
+                        "/app.js": "app.js"}[parsed.path]
             mime = "text/html" if filename.endswith(".html") else (
                 "text/css" if filename.endswith(".css") else "application/javascript"
             )
@@ -180,7 +268,10 @@ class LocalHandler(BaseHTTPRequestHandler):
                 self._json(404, {"error": "Job not found."})
                 return
             try:
-                self._json(200, {"job": public_row(row), "packet": packet_for_row(row, self.server.out)})
+                self._json(200, {
+                    "job": public_row(row), "packet": packet_for_row(row, self.server.out),
+                    "review": load_review(self.server.out, job_id),
+                })
             except (OSError, ValueError) as exc:
                 self._json(400, {"error": str(exc)})
             return
@@ -204,8 +295,12 @@ class LocalHandler(BaseHTTPRequestHandler):
                 self._prepare(data)
             elif self.path == "/api/feedback":
                 self._feedback(data)
+            elif self.path == "/api/review":
+                self._review(data)
             else:
                 self._json(404, {"error": "Not found."})
+        except ReviewConflict as exc:
+            self._json(409, {"error": str(exc)})
         except (ValueError, UnicodeError, OSError) as exc:
             self._json(400, {"error": str(exc)})
         except Exception as exc:
@@ -229,7 +324,8 @@ class LocalHandler(BaseHTTPRequestHandler):
             existing = tracked_row(rows, job_id_for_source(url), url)
             if existing:
                 self._json(200, {"duplicate": True, "job": public_row(existing),
-                                 "packet": packet_for_row(existing, self.server.out)})
+                                 "packet": packet_for_row(existing, self.server.out),
+                                 "review": load_review(self.server.out, existing["job_id"])})
                 return
             if not os.getenv("OPENAI_API_KEY"):
                 raise ValueError("Set OPENAI_API_KEY in the server terminal before preparing a new job.")
@@ -244,7 +340,8 @@ class LocalHandler(BaseHTTPRequestHandler):
             existing = tracked_row(rows, job_id_for_source(None, posting), None, posting)
             if existing:
                 self._json(200, {"duplicate": True, "job": public_row(existing),
-                                 "packet": packet_for_row(existing, self.server.out)})
+                                 "packet": packet_for_row(existing, self.server.out),
+                                 "review": load_review(self.server.out, existing["job_id"])})
                 return
             if not os.getenv("OPENAI_API_KEY"):
                 raise ValueError("Set OPENAI_API_KEY in the server terminal before preparing a new job.")
@@ -260,13 +357,27 @@ class LocalHandler(BaseHTTPRequestHandler):
             if existing is None:
                 raise ValueError("The job was skipped but its tracker row was not found.")
             self._json(200, {"duplicate": True, "job": public_row(existing),
-                             "packet": packet_for_row(existing, self.server.out)})
+                             "packet": packet_for_row(existing, self.server.out),
+                             "review": load_review(self.server.out, existing["job_id"])})
             return
         row = tracked_row(read_tracker(self.server.out / "applications.csv"), job.job_id, url)
         if row is None:
             raise ValueError("Prepared job was not found in the tracker.")
         self._json(200, {"duplicate": False, "job": public_row(row),
-                         "packet": packet_for_row(row, self.server.out)})
+                         "packet": packet_for_row(row, self.server.out),
+                         "review": load_review(self.server.out, job.job_id)})
+
+    def _review(self, data: dict) -> None:
+        job_id = data.get("job_id")
+        if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
+            raise ValueError("Invalid job ID.")
+        row = next((item for item in read_tracker(self.server.out / "applications.csv")
+                    if item.get("job_id") == job_id), None)
+        if row is None:
+            raise ValueError("Job ID not found in tracker.")
+        # Refuse to edit a review when its source packet is no longer available.
+        packet_for_row(row, self.server.out)
+        self._json(200, {"review": save_review(self.server.out, job_id, data)})
 
     def _feedback(self, data: dict) -> None:
         job_id, status = data.get("job_id"), data.get("status")

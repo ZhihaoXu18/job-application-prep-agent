@@ -1,6 +1,8 @@
 const $ = (id) => document.getElementById(id);
 let activeJob = null;
 let activePacket = "";
+let activeReviewRevision = "";
+let reviewDirty = false;
 const termLabels = {"8_month_confirmed": "8 个月已确认", "4_month_only": "仅 4 个月", "variable_or_unclear": "任期待确认"};
 const statusLabels = {prepared: "已准备", applied: "已申请", interview: "面试", rejected: "未通过", no_response: "暂无回复", offer: "收到 offer"};
 
@@ -117,15 +119,59 @@ async function encodedFile(file) {
   return {name: file.name, data: btoa(binary)};
 }
 
-function showPacket(job, packet, duplicate = false) {
+function generatedDraft(packet) {
+  const start = packet.indexOf("## Short application draft");
+  if (start < 0) return "";
+  const from = start + "## Short application draft".length;
+  const end = packet.indexOf("## Your actions", from);
+  return packet.slice(from, end < 0 ? undefined : end).trim();
+}
+
+function reviewChecks() {
+  return {
+    posting_status: $("checkPosting").checked,
+    term_and_dates: $("checkTerm").checked,
+    resume_and_draft: $("checkClaims").checked,
+  };
+}
+
+function updateReviewProgress() {
+  const count = Object.values(reviewChecks()).filter(Boolean).length;
+  $("reviewProgress").textContent = `${count} / 3 已核对`;
+}
+
+function markReviewDirty() {
+  if (!activeJob) return;
+  reviewDirty = true;
+  $("reviewSavedAt").textContent = "有未保存的修改；原始生成包不会被修改。";
+  updateReviewProgress();
+}
+
+function canLeaveReview() {
+  return !reviewDirty || window.confirm("当前人工审阅有未保存的修改。确定离开这份职位吗？");
+}
+
+function showPacket(job, packet, duplicate = false, review = {}) {
+  $("feedbackNotice").hidden = true;
   activeJob = job;
   activePacket = packet;
+  activeReviewRevision = review.revision || "";
+  reviewDirty = false;
   $("emptyResult").hidden = true;
   $("result").hidden = false;
   $("resultTitle").textContent = `${job.title || "未注明职位"} — ${job.employer || "未注明雇主"}`;
   $("resultMeta").textContent = `Job ID: ${job.job_id} · ${job.prepared_at || ""}`;
   $("resultBadge").textContent = duplicate ? "已在 tracker 中 · 未重复分析" : "准备完成 · 尚未提交";
   renderPacket(packet);
+  $("editedDraft").value = review.saved ? review.draft : generatedDraft(packet);
+  $("reviewNotes").value = review.notes || "";
+  $("checkPosting").checked = Boolean(review.checks?.posting_status);
+  $("checkTerm").checked = Boolean(review.checks?.term_and_dates);
+  $("checkClaims").checked = Boolean(review.checks?.resume_and_draft);
+  $("reviewSavedAt").textContent = review.saved
+    ? `已保存于 ${review.saved_at}；原始生成包保持不变。`
+    : "尚未保存；原始生成包不会被修改。";
+  updateReviewProgress();
   $("statusSelect").value = job.status || "prepared";
   $("result").scrollIntoView({behavior: "smooth", block: "start"});
 }
@@ -167,9 +213,10 @@ function renderJobs(jobs) {
     main.append(element("strong", "", `${job.title || "未注明职位"} — ${job.employer || "未注明雇主"}`), element("small", "", `ID ${job.job_id}`));
     button.append(main, element("span", "job-status", statusLabels[job.status] || job.status || "已准备"));
     button.addEventListener("click", async () => {
+      if (!canLeaveReview()) return;
       try {
         const result = await api(`/api/packet?id=${encodeURIComponent(job.job_id)}`);
-        showPacket(result.job, result.packet, true);
+        showPacket(result.job, result.packet, true, result.review);
       } catch (error) {
         showNotice(error.message, true);
       }
@@ -191,6 +238,7 @@ async function refreshState() {
 
 async function prepare(event) {
   event.preventDefault();
+  if (!canLeaveReview()) return;
   const button = $("prepareButton");
   button.disabled = true;
   button.firstElementChild.textContent = "正在准备，请稍候…";
@@ -210,7 +258,7 @@ async function prepare(event) {
       headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
       body: JSON.stringify(payload),
     });
-    showPacket(result.job, result.packet, result.duplicate);
+    showPacket(result.job, result.packet, result.duplicate, result.review);
     showNotice(result.duplicate ? "这个职位已在 tracker 中，已打开原有审阅包；没有再次调用模型。" : "审阅包已生成。请逐项核对原始职位页面与履历事实。");
     await refreshState();
   } catch (error) {
@@ -238,15 +286,64 @@ async function saveStatus() {
   }
 }
 
-function downloadPacket() {
-  if (!activePacket || !activeJob) return;
-  const blob = new Blob([activePacket], {type: "text/markdown;charset=utf-8"});
+async function saveReview() {
+  if (!activeJob) return;
+  const button = $("saveReview");
+  button.disabled = true;
+  try {
+    const result = await api("/api/review", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
+      body: JSON.stringify({
+        job_id: activeJob.job_id,
+        draft: $("editedDraft").value,
+        notes: $("reviewNotes").value,
+        checks: reviewChecks(),
+        base_revision: activeReviewRevision,
+      }),
+    });
+    activeReviewRevision = result.review.revision;
+    reviewDirty = false;
+    $("reviewSavedAt").textContent = `已保存于 ${result.review.saved_at}；原始生成包保持不变。`;
+    showNotice("人工审阅已保存在本机。没有向雇主发送任何内容。");
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function downloadText(name, contents) {
+  const blob = new Blob([contents], {type: "text/markdown;charset=utf-8"});
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `${activeJob.job_id}-review.md`;
+  link.download = name;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadPacket() {
+  if (!activePacket || !activeJob) return;
+  downloadText(`${activeJob.job_id}-generated.md`, activePacket);
+}
+
+function downloadReviewed() {
+  if (!activeJob) return;
+  const checks = reviewChecks();
+  const lines = [
+    `# Personal review worksheet — ${activeJob.title || "Untitled role"}`,
+    "", `Job ID: ${activeJob.job_id}`,
+    "This is a local working draft, not an application or proof of eligibility.",
+    "", "## My edited application paragraph", "", $("editedDraft").value || "(Not written)",
+    "", "## My manual checks", "",
+    `- [${checks.posting_status ? "x" : " "}] I checked whether the employer posting is still accepting applications.`,
+    `- [${checks.term_and_dates ? "x" : " "}] I verified the term and dates against the employer posting.`,
+    `- [${checks.resume_and_draft ? "x" : " "}] I verified resume and draft claims against my own evidence.`,
+    "", "## Private notes — do not send to an employer", "", $("reviewNotes").value || "(None)",
+    "", "## Original generated packet for reference", "", activePacket,
+  ];
+  downloadText(`${activeJob.job_id}-my-review.md`, lines.join("\n"));
 }
 
 document.querySelectorAll('input[name="sourceType"]').forEach((radio) => radio.addEventListener("change", syncSourceMode));
@@ -254,6 +351,12 @@ $("resumeFile").addEventListener("change", () => $("resumeFileName").textContent
 $("profileFile").addEventListener("change", () => $("profileFileName").textContent = $("profileFile").files[0]?.name || "未提供则不假设偏好");
 $("prepareForm").addEventListener("submit", prepare);
 $("saveStatus").addEventListener("click", saveStatus);
+$("saveReview").addEventListener("click", saveReview);
 $("downloadPacket").addEventListener("click", downloadPacket);
+$("downloadReviewed").addEventListener("click", downloadReviewed);
+for (const id of ["editedDraft", "reviewNotes", "checkPosting", "checkTerm", "checkClaims"]) {
+  $(id).addEventListener("input", markReviewDirty);
+  $(id).addEventListener("change", markReviewDirty);
+}
 syncSourceMode();
 refreshState().catch((error) => showNotice(error.message, true));

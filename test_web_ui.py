@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from job_agent import read_tracker
 from test_job_agent import fixture, make_analysis
-from web_ui import LocalServer, packet_for_row, resume_from_request
+from web_ui import LocalServer, packet_for_row, resume_from_request, review_path
 
 
 class WebInputChecks(unittest.TestCase):
@@ -37,6 +37,15 @@ class WebInputChecks(unittest.TestCase):
         with TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "outside"):
                 packet_for_row({"packet": "../private.md"}, Path(directory) / "output")
+
+    def test_review_reader_rejects_symbolic_link(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            reviews = root / "output" / "reviews"
+            reviews.mkdir(parents=True)
+            (reviews / ("a" * 12 + ".json")).symlink_to(root / "unrelated.json")
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                review_path(root / "output", "a" * 12)
 
 
 class LocalHTTPChecks(unittest.TestCase):
@@ -75,12 +84,26 @@ class LocalHTTPChecks(unittest.TestCase):
             "posting_text": fixture("job_explicit_eight_months.txt"),
         }
 
+    def prepare_synthetic(self):
+        term_quote = "Work term: January 4 to August 27, 2027 (8 months)."
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "synthetic-test-key"}),
+            patch("job_agent.make_analysis", return_value=make_analysis(term_quote)),
+        ):
+            status, _, raw = self.request("POST", "/api/prepare", self.prepare_payload())
+        self.assertEqual(status, 200)
+        return json.loads(raw)
+
     def test_local_page_and_empty_state_have_privacy_headers(self):
         status, headers, page = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b"Co-op Prep", page)
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+        status, headers, stylesheet = self.request("GET", "/review.css")
+        self.assertEqual(status, 200)
+        self.assertIn(b"review-editor", stylesheet)
+        self.assertIn("text/css", headers["Content-Type"])
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
             status, _, raw = self.request("GET", "/api/state")
         self.assertEqual(status, 200)
@@ -138,6 +161,68 @@ class LocalHTTPChecks(unittest.TestCase):
         rows = read_tracker(self.out / "applications.csv")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "applied")
+
+    def test_review_is_local_editable_and_does_not_change_generated_packet(self):
+        prepared = self.prepare_synthetic()
+        job_id = prepared["job"]["job_id"]
+        original_packet = prepared["packet"]
+        self.assertFalse(prepared["review"]["saved"])
+        self.assertIsNone(prepared["review"]["draft"])
+        payload = {
+            "job_id": job_id,
+            "draft": "I reviewed this synthetic application paragraph.",
+            "notes": "Confirm the live employer deadline before applying.",
+            "checks": {
+                "posting_status": False,
+                "term_and_dates": True,
+                "resume_and_draft": True,
+            },
+            "base_revision": "",
+        }
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
+            status, _, raw = self.request("POST", "/api/review", payload)
+        self.assertEqual(status, 200)
+        saved = json.loads(raw)["review"]
+        self.assertTrue(saved["saved"])
+        self.assertEqual(saved["draft"], payload["draft"])
+        self.assertEqual(saved["checks"]["posting_status"], False)
+        self.assertEqual(len(saved["revision"]), 64)
+        self.assertEqual(review_path(self.out, job_id).stat().st_mode & 0o777, 0o600)
+
+        status, _, raw = self.request("GET", f"/api/packet?id={job_id}")
+        self.assertEqual(status, 200)
+        reopened = json.loads(raw)
+        self.assertEqual(reopened["review"]["draft"], payload["draft"])
+        self.assertEqual(reopened["packet"], original_packet)
+
+        payload["draft"] = "A newer version."
+        status, _, raw = self.request("POST", "/api/review", payload)
+        self.assertEqual(status, 409)
+        self.assertIn(b"another tab", raw)
+        payload["base_revision"] = saved["revision"]
+        status, _, raw = self.request("POST", "/api/review", payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["review"]["draft"], "A newer version.")
+
+    def test_review_rejects_untracked_job_and_invalid_checks(self):
+        unknown = "a" * 12
+        payload = {
+            "job_id": unknown, "draft": "test", "notes": "",
+            "checks": {"posting_status": False, "term_and_dates": False,
+                       "resume_and_draft": False},
+            "base_revision": "",
+        }
+        status, _, _ = self.request("POST", "/api/review", payload)
+        self.assertEqual(status, 400)
+        self.assertFalse(review_path(self.out, unknown).exists())
+
+        prepared = self.prepare_synthetic()
+        payload["job_id"] = prepared["job"]["job_id"]
+        payload["checks"]["posting_status"] = "yes"
+        status, _, raw = self.request("POST", "/api/review", payload)
+        self.assertEqual(status, 400)
+        self.assertIn(b"three true/false values", raw)
+        self.assertFalse(review_path(self.out, payload["job_id"]).exists())
 
 
 if __name__ == "__main__":
