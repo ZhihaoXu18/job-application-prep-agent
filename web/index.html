@@ -93,7 +93,8 @@
               <p id="reviewSavedAt" class="review-saved" role="status">尚未保存；原始生成包不会被修改。</p>
               <div class="application-export"><div><strong>申请段落 · 纯文本</strong><p id="exportReadiness" role="status">完成三项核对并保存后可下载。</p></div><button id="downloadApplication" class="review-save" type="button" disabled>下载申请段落 ↓</button></div>
             </div>
-            <div class="status-box"><div><strong>记录进展</strong><p>只更新本地 tracker；不会向雇主发送任何内容。</p></div><div class="status-actions"><select id="statusSelect" aria-label="申请状态"><option value="prepared">已准备</option><option value="applied">我已自行申请</option><option value="interview">面试</option><option value="rejected">未通过</option><option value="no_response">暂无回复</option><option value="offer">收到 offer</option></select><button id="saveStatus" type="button">保存</button></div></div>
+            <div class="status-box"><div><strong>记录进展</strong><p>在你自行申请或收到更新后记录。每次变化保留历史。</p></div><div class="status-actions"><select id="statusSelect" aria-label="申请状态"><option value="prepared">已准备</option><option value="applied">我已自行申请</option><option value="interview">面试</option><option value="rejected">未通过</option><option value="no_response">暂无回复</option><option value="offer">收到 offer</option></select><button id="saveStatus" type="button">保存</button></div></div>
+            <section class="status-history" aria-labelledby="statusHistoryTitle"><h3 id="statusHistoryTitle">申请进展时间线</h3><p>时间是你记录更新的时间，可能与实际申请或面试时间不同。</p><ol id="statusTimeline"></ol></section>
           </div>
         </section>
       </div>

@@ -784,6 +784,9 @@ class OutputChecks(unittest.TestCase):
             rows = read_tracker(output / "applications.csv")
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["status"], "applied")
+            history = json.loads(rows[0]["status_history"])
+            self.assertEqual([event["to"] for event in history], ["prepared", "applied"])
+            self.assertEqual(history[-1]["source"], "cli")
 
 
 if __name__ == "__main__":

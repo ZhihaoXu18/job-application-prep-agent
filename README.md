@@ -106,6 +106,8 @@ python job_agent.py --feedback-job-id JOB_ID --outcome interview
 
 Other values: `rejected`, `no_response`, `offer`. The tracker helps compare actual results over time; a small number of applications cannot establish a reliable interview-rate improvement.
 
+Each status change now preserves the previous state, next state, recording time (Toronto time), and whether it came from the web page or CLI. Open a job to see its **Application progress timeline**. Repeatedly saving the same status does not add an event or change its timestamp. Corrections may move back to an earlier stage; they append another transition rather than erase prior entries. Times reflect when you recorded an update, not independently verified application or interview dates. Older CSV rows display only their last known state as a legacy baseline; missing earlier history and timestamps remain unknown. The browser detects stale status revisions and asks you to reopen the job before updating. History and the current status are stored together in a new `status_history` CSV column using an atomic local write. See [Day 12 history notes](docs/day-12-status-history.md).
+
 ## Current scope
 
 - Single-posting browser preparation and deduplicated CLI batch preparation; no automatic job discovery or batch submission.

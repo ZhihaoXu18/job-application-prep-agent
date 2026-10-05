@@ -19,6 +19,7 @@ from direction_suggestions import apply_confirmed_directions, resume_fingerprint
 from job_agent import (
     CandidateProfile,
     STATUSES,
+    StatusConflict,
     already_tracked,
     fetch_job,
     job_id_for_source,
@@ -27,8 +28,10 @@ from job_agent import (
     prepare_job,
     read_resume_bytes,
     read_tracker,
+    record_status,
+    status_history,
+    status_revision,
     validate_profile,
-    write_tracker,
 )
 
 
@@ -90,10 +93,12 @@ def profile_from_request(data: dict, resume: str) -> CandidateProfile:
         raise ValueError(f"Profile JSON could not be parsed: {exc.msg}") from exc
 
 
-def public_row(row: dict[str, str]) -> dict[str, str]:
-    return {key: row.get(key, "") for key in (
+def public_row(row: dict[str, str]) -> dict:
+    result = {key: row.get(key, "") for key in (
         "job_id", "employer", "title", "url", "prepared_at", "status", "outcome_at"
     )}
+    result.update(status_history=status_history(row), status_revision=status_revision(row))
+    return result
 
 
 def tracked_row(rows: list[dict[str, str]], job_id: str, url: str | None, posting: str = "") -> dict[str, str] | None:
@@ -253,11 +258,14 @@ class LocalHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/state":
             rows = read_tracker(self.server.out / "applications.csv")
             queue = self.server.out / "priority_queue.md"
-            self._json(200, {
-                "jobs": [public_row(row) for row in reversed(rows)],
-                "queue": queue.read_text(encoding="utf-8") if queue.is_file() else "",
-                "api_key_ready": bool(os.getenv("OPENAI_API_KEY")),
-            })
+            try:
+                self._json(200, {
+                    "jobs": [public_row(row) for row in reversed(rows)],
+                    "queue": queue.read_text(encoding="utf-8") if queue.is_file() else "",
+                    "api_key_ready": bool(os.getenv("OPENAI_API_KEY")),
+                })
+            except (OSError, ValueError) as exc:
+                self._json(400, {"error": str(exc)})
             return
         if parsed.path == "/api/packet":
             job_id = parse_qs(parsed.query).get("id", [""])[0]
@@ -305,7 +313,7 @@ class LocalHandler(BaseHTTPRequestHandler):
                 self._export(data)
             else:
                 self._json(404, {"error": "Not found."})
-        except ReviewConflict as exc:
+        except (ReviewConflict, StatusConflict) as exc:
             self._json(409, {"error": str(exc)})
         except (ValueError, UnicodeError, OSError) as exc:
             self._json(400, {"error": str(exc)})
@@ -425,14 +433,12 @@ class LocalHandler(BaseHTTPRequestHandler):
             raise ValueError("Invalid job ID.")
         if status not in STATUSES:
             raise ValueError("Invalid application status.")
-        tracker = self.server.out / "applications.csv"
-        rows = read_tracker(tracker)
-        row = next((item for item in rows if item.get("job_id") == job_id), None)
-        if row is None:
-            raise ValueError("Job ID not found in tracker.")
-        row["status"] = status
-        row["outcome_at"] = now_toronto()
-        write_tracker(tracker, rows)
+        base_revision = data.get("base_revision")
+        if base_revision is not None and (
+            not isinstance(base_revision, str) or not REVISION_PATTERN.fullmatch(base_revision)
+        ):
+            raise ValueError("Invalid status revision.")
+        row = record_status(self.server.out / "applications.csv", job_id, status, "web", base_revision)
         self._json(200, {"job": public_row(row)})
 
 

@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from direction_suggestions import resume_fingerprint
-from job_agent import read_tracker
+from job_agent import read_tracker, record_status
 from test_job_agent import fixture, make_analysis
 from web_ui import LocalServer, packet_for_row, resume_from_request, review_path
 
@@ -275,6 +275,48 @@ class LocalHTTPChecks(unittest.TestCase):
         status, _, raw = self.request("POST", "/api/review", payload)
         self.assertEqual(status, 200)
         return json.loads(raw)["review"]
+
+    def test_feedback_history_survives_reopen_and_rejects_stale_tab(self):
+        prepared = self.prepare_synthetic()
+        job = prepared["job"]
+        self.assertEqual(job["status_history"][0]["source"], "preparation")
+        self.assertEqual(job["status_history"][0]["at"], job["prepared_at"])
+        payload = {"job_id": job["job_id"], "status": "applied", "base_revision": job["status_revision"]}
+        status, _, raw = self.request("POST", "/api/feedback", payload)
+        self.assertEqual(status, 200)
+        applied = json.loads(raw)["job"]
+        self.assertEqual([event["to"] for event in applied["status_history"]], ["prepared", "applied"])
+        self.assertEqual(applied["status_history"][-1]["source"], "web")
+        payload["status"] = "interview"
+        status, _, raw = self.request("POST", "/api/feedback", payload)
+        self.assertEqual(status, 409)
+        self.assertIn(b"Reopen the job", raw)
+
+        # A command-line update uses the same timeline and invalidates the browser revision.
+        record_status(self.out / "applications.csv", job["job_id"], "interview", "cli")
+        status, _, raw = self.request("GET", f"/api/packet?id={job['job_id']}")
+        self.assertEqual(status, 200)
+        reopened = json.loads(raw)
+        self.assertEqual(reopened["packet"], prepared["packet"])
+        self.assertEqual([event["to"] for event in reopened["job"]["status_history"]], ["prepared", "applied", "interview"])
+        self.assertEqual(reopened["job"]["status_history"][-1]["source"], "cli")
+        before = (self.out / "applications.csv").read_bytes()
+        status, _, _ = self.request("POST", "/api/feedback", {
+            "job_id": job["job_id"], "status": "interview",
+            "base_revision": reopened["job"]["status_revision"],
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual((self.out / "applications.csv").read_bytes(), before)
+
+    def test_bad_feedback_revision_is_rejected(self):
+        job = self.prepare_synthetic()["job"]
+        before = (self.out / "applications.csv").read_bytes()
+        for bad in [False, [], "bad"]:
+            status, _, _ = self.request("POST", "/api/feedback", {
+                "job_id": job["job_id"], "status": "applied", "base_revision": bad,
+            })
+            self.assertEqual(status, 400)
+        self.assertEqual((self.out / "applications.csv").read_bytes(), before)
 
     def test_application_export_contains_only_saved_draft_and_does_not_mutate(self):
         job_id = self.prepare_synthetic()["job"]["job_id"]

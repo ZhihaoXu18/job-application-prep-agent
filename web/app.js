@@ -243,6 +243,21 @@ function canLeaveReview() {
   return !reviewDirty || window.confirm("当前人工审阅有未保存的修改。确定离开这份职位吗？");
 }
 
+function renderStatusHistory(job) {
+  const list = $("statusTimeline");
+  list.replaceChildren();
+  for (const event of job.status_history || []) {
+    const item = element("li", "");
+    const label = statusLabels[event.to] || event.to;
+    item.append(element("strong", "", event.kind === "change"
+      ? `${statusLabels[event.from] || event.from} → ${label}`
+      : event.source === "legacy" ? `历史起点（最后已知状态）：${label}` : label));
+    const source = {legacy:"旧记录；此前变化未知", preparation:"准备记录", web:"网页记录", cli:"命令行记录"}[event.source] || "记录";
+    item.append(element("small", "", `${event.at || "时间未记录"} · ${source}`));
+    list.append(item);
+  }
+}
+
 function showPacket(job, packet, duplicate = false, review = {}) {
   $("feedbackNotice").hidden = true;
   activeJob = job;
@@ -265,6 +280,7 @@ function showPacket(job, packet, duplicate = false, review = {}) {
     : "尚未保存；原始生成包不会被修改。";
   updateReviewProgress();
   $("statusSelect").value = job.status || "prepared";
+  renderStatusHistory(job);
   $("result").scrollIntoView({behavior: "smooth", block: "start"});
 }
 
@@ -364,18 +380,26 @@ async function prepare(event) {
 
 async function saveStatus() {
   if (!activeJob) return;
+  const jobId = activeJob.job_id;
   const status = $("statusSelect").value;
+  const button = $("saveStatus");
+  button.disabled = true;
   try {
     const result = await api("/api/feedback", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
-      body: JSON.stringify({job_id: activeJob.job_id, status}),
+      body: JSON.stringify({job_id: jobId, status, base_revision: activeJob.status_revision}),
     });
+    if (activeJob?.job_id !== jobId) return;
     activeJob = result.job;
-    showNotice("本地 tracker 已更新。此操作没有向雇主发送申请。");
+    $("statusSelect").value = activeJob.status;
+    renderStatusHistory(activeJob);
+    showNotice("进展已保存在本机；重复保存同一状态不会增加记录。此操作没有向雇主发送申请。");
     await refreshState();
   } catch (error) {
     showNotice(error.message, true);
+  } finally {
+    button.disabled = false;
   }
 }
 

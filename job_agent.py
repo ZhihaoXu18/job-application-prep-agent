@@ -16,11 +16,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fcntl
 import hashlib
 import io
 import json
+import os
 import re
 import sys
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -33,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 TRACKER_FIELDS = [
     "job_id", "employer", "title", "url", "prepared_at", "packet", "status", "outcome_at",
-    "content_fingerprint",
+    "content_fingerprint", "status_history",
 ]
 STATUSES = ("prepared", "applied", "interview", "rejected", "no_response", "offer")
 TRACKING_PARAMETERS = {"fbclid", "gclid", "msclkid", "mc_cid", "mc_eid"}
@@ -469,10 +473,95 @@ def read_tracker(path: Path) -> list[dict[str, str]]:
 
 def write_tracker(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=TRACKER_FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
+    if path.is_symlink():
+        raise ValueError("Tracker cannot be a symbolic link.")
+    descriptor, temporary = tempfile.mkstemp(prefix=".applications-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=TRACKER_FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+@contextmanager
+def tracker_lock(path: Path):
+    """Serialize read-modify-write operations across the local CLI and web server."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path.with_suffix(".csv.lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+class StatusConflict(ValueError):
+    """A stale browser tried to replace a newer application status."""
+
+
+def status_revision(row: dict[str, str]) -> str:
+    values = [row.get(name, "") for name in ("status", "outcome_at", "status_history")]
+    return hashlib.sha256(json.dumps(values).encode("utf-8")).hexdigest()
+
+
+def status_history(row: dict[str, str]) -> list[dict[str, str]]:
+    if row.get("status") not in STATUSES:
+        raise ValueError("Application status is invalid; it was not overwritten.")
+    raw = row.get("status_history", "")
+    if not raw:
+        # This is only the last known state, not a reconstructed application journey.
+        return [{"from": "", "to": row.get("status") or "prepared",
+                 "at": row.get("outcome_at") or (row.get("prepared_at", "") if row.get("status") == "prepared" else ""),
+                 "source": "legacy", "kind": "baseline"}]
+    try:
+        events = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Status history is invalid; it was not overwritten.") from exc
+    keys = {"from", "to", "at", "source", "kind"}
+    if not isinstance(events, list) or not events or any(
+        not isinstance(event, dict) or set(event) != keys or
+        any(not isinstance(value, str) for value in event.values()) or
+        event["to"] not in STATUSES or event["from"] not in ("", *STATUSES) or
+        event["kind"] not in ("baseline", "change") or
+        event["source"] not in ("legacy", "preparation", "web", "cli")
+        for event in events
+    ) or events[-1]["to"] != row.get("status"):
+        raise ValueError("Status history is invalid; it was not overwritten.")
+    if events[0]["kind"] != "baseline" or events[0]["from"] or any(
+        event["kind"] != "change" or event["from"] != previous["to"]
+        for previous, event in zip(events, events[1:])
+    ):
+        raise ValueError("Status history is invalid; it was not overwritten.")
+    return events
+
+
+def record_status(path: Path, job_id: str, status: str, source: str,
+                  base_revision: str | None = None) -> dict[str, str]:
+    if status not in STATUSES or source not in ("web", "cli"):
+        raise ValueError("Invalid application status or source.")
+    with tracker_lock(path):
+        rows = read_tracker(path)
+        row = next((item for item in rows if item.get("job_id") == job_id), None)
+        if row is None:
+            raise ValueError("Job ID not found in tracker.")
+        if base_revision is not None and base_revision != status_revision(row):
+            raise StatusConflict("Status changed in another tab or the CLI. Reopen the job before updating.")
+        events = status_history(row)
+        if row.get("status") == status:
+            return row
+        at = now_toronto()
+        events.append({"from": row.get("status") or "prepared", "to": status,
+                       "at": at, "source": source, "kind": "change"})
+        row.update(status=status, outcome_at=at,
+                   status_history=json.dumps(events, ensure_ascii=False))
+        write_tracker(path, rows)
+        return row
 
 
 def canonical_url(url: str) -> str:
@@ -655,16 +744,20 @@ def prepare_job(
     checked_at = now_toronto()
     result = check_analysis(make_analysis(resume, posting, source, profile), resume, posting)
     out.mkdir(parents=True, exist_ok=True)
-    packet = out / f"{job_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
-    packet.write_text(render_packet(result, resume, posting, source, checked_at), encoding="utf-8")
-
-    rows = read_tracker(tracker)
-    rows.append({
-        "job_id": job_id, "employer": result.employer, "title": result.title,
-        "url": url or "", "prepared_at": checked_at, "packet": str(packet),
-        "status": "prepared", "outcome_at": "", "content_fingerprint": fingerprint,
-    })
-    write_tracker(tracker, rows)
+    with tracker_lock(tracker):
+        rows = read_tracker(tracker)
+        if already_tracked(rows, job_id, url, fingerprint):
+            return None
+        packet = out / f"{job_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
+        packet.write_text(render_packet(result, resume, posting, source, checked_at), encoding="utf-8")
+        rows.append({
+            "job_id": job_id, "employer": result.employer, "title": result.title,
+            "url": url or "", "prepared_at": checked_at, "packet": str(packet),
+            "status": "prepared", "outcome_at": "", "content_fingerprint": fingerprint,
+            "status_history": json.dumps([{"from": "", "to": "prepared", "at": checked_at,
+                                           "source": "preparation", "kind": "baseline"}]),
+        })
+        write_tracker(tracker, rows)
 
     print(f"Prepared: {packet}\nTracker: {tracker}\nJob ID: {job_id}")
     if result.term_classification != "8_month_confirmed":
@@ -700,13 +793,10 @@ def main() -> int:
     if args.feedback_job_id:
         if not args.outcome:
             parser.error("--feedback-job-id requires --outcome")
-        rows = read_tracker(tracker)
-        match = next((row for row in rows if row["job_id"] == args.feedback_job_id), None)
-        if match is None:
-            parser.error("Job ID not found in tracker")
-        match["status"] = args.outcome
-        match["outcome_at"] = now_toronto()
-        write_tracker(tracker, rows)
+        try:
+            record_status(tracker, args.feedback_job_id, args.outcome, "cli")
+        except ValueError as exc:
+            parser.error(str(exc))
         print(f"Recorded {args.outcome} for {args.feedback_job_id}")
         return 0
 

@@ -18,5 +18,12 @@
 .application-export p{font-size:12px;color:#476260;line-height:1.6;margin:5px 0 0}
 .application-export button{flex-shrink:0;border-radius:9px;padding:10px 14px;font-size:12px;font-weight:750}
 .application-export button:disabled{opacity:.45;cursor:not-allowed}
+.status-history{border-top:1px solid #e3ece7;margin-top:18px;padding-top:16px}
+.status-history h3{font-size:14px;color:#173f3d;margin:0 0 7px}
+.status-history p{font-size:12px;color:#819591;line-height:1.6}
+.status-history ol{list-style:none;margin:12px 0 0;padding:0}
+.status-history li{border-left:2px solid #c5ded0;padding:6px 0 13px 14px}
+.status-history strong{display:block;font-size:12px;color:#476260}
+.status-history small{display:block;font-size:11px;color:#819591;margin-top:5px;line-height:1.5}
 @media(max-width:640px){.application-export{align-items:stretch;flex-direction:column}}
 @media(max-width:640px){.review-actions{flex-direction:column}.review-actions button{width:100%}}

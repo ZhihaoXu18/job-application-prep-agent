@@ -10,3 +10,4 @@ profile*.json
 posting.txt
 job_agent_output/
 applications.csv
+applications.csv.lock

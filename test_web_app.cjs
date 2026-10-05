@@ -61,5 +61,18 @@ function input(id) { for (const listener of node(id).listeners.input || []) list
   await pendingExport;
   assert.equal(run('downloaded'), false);
   assert.equal(node('downloadApplication').disabled, true);
-  console.log('4 editor/export state regressions passed');
+
+  // A delayed status response must not change the currently opened job.
+  ready();
+  run('activeJob.status_revision = "old status";');
+  node('statusSelect').value = 'applied';
+  const pendingStatus = run('saveStatus()');
+  assert.equal(node('saveStatus').disabled, true);
+  run('activeJob = {job_id: "bbbbbbbbbbbb", status: "interview"};');
+  run('resolveSave({job: {job_id: "aaaaaaaaaaaa", status: "applied"}})');
+  await pendingStatus;
+  assert.equal(run('activeJob.job_id'), 'bbbbbbbbbbbb');
+  assert.equal(run('activeJob.status'), 'interview');
+  assert.equal(node('saveStatus').disabled, false);
+  console.log('5 editor/export/status state regressions passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
