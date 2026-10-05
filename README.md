@@ -83,7 +83,7 @@ Batch processing writes one review packet per newly prepared job, a shared track
 
 The review queue sorts only newly prepared jobs. Its transparent score uses your stated role, location, work-mode, and term preferences plus an unambiguous quoted deadline and employer publication date. Missing or ambiguous dates get no date points; the page retrieval date is never treated as the publication date. A past quoted deadline lowers the review score but does not prove the posting is closed. The score is an ordering aid, not an eligibility check or prediction of hiring odds. See [Day 7 details](docs/day-7-dedup-priority.md).
 
-The script writes a Markdown review packet and `applications.csv` inside `job_agent_output/`. It uses `gpt-6-sol` through the OpenAI Responses API. The model's extracted dates and source quotes are hints for review, not independently verified evidence. Four-month-only and ambiguous terms are explicitly flagged.
+The script writes a Markdown review packet and `applications.csv` inside `job_agent_output/`. It uses `gpt-5.6-sol` through the OpenAI Responses API. The model's extracted dates and source quotes are hints for review, not independently verified evidence. Four-month-only and ambiguous terms are explicitly flagged.
 
 The code also checks whether each quoted fact appears in the supplied posting and whether a proposed original résumé bullet appears in the supplied résumé. Unsupported dates are reset to `Not stated`; an unsupported eight-month claim is downgraded to an unclear term. This text check cannot independently confirm that the employer page is current or that a rewrite is truthful.
 

@@ -282,7 +282,7 @@ def make_analysis(
     from openai import OpenAI
 
     response = OpenAI().responses.parse(
-        model="gpt-6-sol",
+        model="gpt-5.6-sol",
         input=analysis_messages(resume, posting, source, profile),
         text_format=Analysis,
     )
