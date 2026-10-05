@@ -29,6 +29,14 @@ class DirectionSuggestionChecks(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "Unknown exploration"):
                 get_role_family(value)
 
+    def test_finance_replaces_business_with_finance_role_presets(self):
+        family = get_role_family("finance")
+        self.assertEqual(family["label"], "金融")
+        self.assertEqual(family["roles"], [
+            "Financial Analyst Co-op", "Risk Analyst Co-op", "Investment Analyst Co-op",
+        ])
+        self.assertNotIn("business", [item["id"] for item in ROLE_FAMILIES])
+
     def test_synthetic_resume_suggestions_quote_only_resume_evidence(self):
         resume = fixture("synthetic_resume.md")
         suggestions = suggest_directions(resume)

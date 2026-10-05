@@ -80,7 +80,7 @@ function input(id) { for (const listener of node(id).listeners.input || []) list
 
   // Catalog refresh retains selection, category changes discard confirmation.
   node('roleFamily').value = 'data';
-  run('renderRoleFamilies([{id:"data", label:"数据"}, {id:"business", label:"商科"}]);');
+  run('renderRoleFamilies([{id:"data", label:"数据"}, {id:"finance", label:"金融"}]);');
   assert.equal(node('roleFamily').value, 'data');
   run('directionFingerprint = "fingerprint"; confirmedRoles = ["old"];');
   for (const listener of node('roleFamily').listeners.change) listener();

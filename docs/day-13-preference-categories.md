@@ -8,7 +8,7 @@
 4. Edit the draft (up to five roles), optionally add a preset, then explicitly confirm it.
 5. Use confirmed directions for subsequent new-job preparation or open optional search links.
 
-Seven categories cover computing, data/math/statistics, business/operations, engineering, design/product, natural/life sciences, and humanities/social sciences/communications. This is a starter catalog, not an exhaustive classification of majors or a live job database. Users can enter more specific roles themselves.
+Seven categories cover computing, data/math/statistics, finance, engineering, design/product, natural/life sciences, and humanities/social sciences/communications. Finance presets include Financial Analyst, Risk Analyst, and Investment Analyst co-op roles. This is a starter catalog, not an exhaustive classification of majors or a live job database. Users can enter more specific roles themselves.
 
 ## Boundaries and data flow
 
