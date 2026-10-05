@@ -114,6 +114,7 @@ class LocalHTTPChecks(unittest.TestCase):
         state = json.loads(raw)
         self.assertFalse(state["api_key_ready"])
         self.assertEqual(state["jobs"], [])
+        self.assertEqual(len(state["role_families"]), 7)
 
     def test_cross_origin_and_missing_custom_header_are_rejected(self):
         payload = self.prepare_payload()
@@ -170,6 +171,31 @@ class LocalHTTPChecks(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn(b"Resume changed", raw)
         analyzed.assert_not_called()
+
+    def test_category_presets_are_separate_from_resume_hints_and_profile(self):
+        payload = self.prepare_payload()
+        payload["role_family"] = "science"
+        payload["profile_json"] = (Path(__file__).parent / "profile.example.json").read_text()
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}), patch("job_agent.make_analysis") as analyzed:
+            status, _, raw = self.request("POST", "/api/directions", payload)
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertEqual(result["role_family"]["id"], "science")
+        self.assertIn("Laboratory Assistant Co-op", result["role_family"]["roles"])
+        self.assertNotIn("evidence", result["role_family"])
+        self.assertIn("Data Analyst Co-op", [item["role"] for item in result["suggestions"]])
+        self.assertEqual(result["current_roles"], ["Data Analyst Co-op", "Business Intelligence Co-op"])
+        self.assertEqual(read_tracker(self.out / "applications.csv"), [])
+        analyzed.assert_not_called()
+
+    def test_unknown_category_is_rejected_without_model(self):
+        payload = self.prepare_payload()
+        for value in ("not-a-category", None, []):
+            payload["role_family"] = value
+            with self.subTest(value=value), patch("job_agent.make_analysis") as analyzed:
+                status, _, _ = self.request("POST", "/api/directions", payload)
+                self.assertEqual(status, 400)
+                analyzed.assert_not_called()
 
     def test_prepare_duplicate_packet_and_manual_status_update(self):
         payload = self.prepare_payload()

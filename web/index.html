@@ -40,14 +40,17 @@
             </div>
 
             <div class="form-block">
-              <div class="block-heading"><span class="block-number">2</span><div><h3>候选人偏好 <em>可选</em></h3><p>上传与命令行相同格式的 profile JSON；证据仍需与履历匹配。</p></div></div>
-              <label class="file-field" for="profileFile"><span>选择 profile.json</span><input id="profileFile" type="file" accept=".json,application/json"><small id="profileFileName">未提供则不假设偏好</small></label>
+              <div class="block-heading"><span class="block-number">2</span><div><h3>候选人偏好 <em>可选</em></h3><p>不用先知道岗位名称：选一个专业 / 兴趣大类，再编辑并确认方向。</p></div></div>
+              <label class="field-label" for="roleFamily">你想探索哪个大类？ <span>不是专业或资格认证</span></label>
+              <select id="roleFamily"><option value="">暂不确定 · 从简历探索 / 手动填写</option></select>
               <div class="direction-start">
-                <div><strong>先从简历探索方向</strong><p>只用简历中的文字给出候选岗位；你修改并确认后才用于新职位分析。</p></div>
-                <button id="suggestDirections" type="button">建议方向</button>
+                <div><strong>大类 → 岗位方向 → 你的确认</strong><p>先在第 1 步提供简历。大类给你探索用的岗位示例，简历线索单独展示。</p></div>
+                <button id="suggestDirections" type="button">展开岗位方向</button>
               </div>
               <div id="directionPanel" class="direction-panel" hidden>
-                <p class="direction-caution">这只是关键词线索，不是资格判断；不会调用模型、搜索网站或保存简历。</p>
+                <p class="direction-caution">大类岗位是探索示例，不代表你已匹配。简历线索也不是资格判断；此步骤不会调用模型、搜索网站或保存简历。</p>
+                <div id="familyResults" class="direction-results" hidden></div>
+                <h4 class="direction-section-title">简历中的关键词线索</h4>
                 <div id="directionResults" class="direction-results" aria-live="polite"></div>
                 <label class="field-label" for="directionRoles">你确认的目标岗位 <span>每行一个，最多 5 个</span></label>
                 <textarea id="directionRoles" rows="3" placeholder="例如 Data Analyst Co-op"></textarea>
@@ -55,6 +58,7 @@
                 <div id="directionSearch" class="direction-search" hidden><strong>按确认的方向去找职位</strong><p>点击后会在搜索网站打开新页面，只带你确认的方向文字和“Canada co-op jobs”；不会发送简历。找到职位后，再把雇主链接贴到第 3 步。</p><div id="directionSearchLinks"></div></div>
               </div>
               <p id="directionStatus" class="direction-status" role="status">尚未确认方向；也可以直接按原流程准备职位。</p>
+              <details class="profile-advanced"><summary>高级选项：上传 profile.json</summary><p>适合已经整理好地点、工作方式等偏好和经历证据的用户。不上传就不假设这些偏好；确认的方向只替换目标岗位。</p><label class="file-field" for="profileFile"><span>选择 profile.json</span><input id="profileFile" type="file" accept=".json,application/json"><small id="profileFileName">未提供则不假设偏好</small></label></details>
             </div>
 
             <div class="form-block last-block">

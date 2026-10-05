@@ -15,7 +15,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from direction_suggestions import apply_confirmed_directions, resume_fingerprint, suggest_directions
+from direction_suggestions import (
+    ROLE_FAMILIES, apply_confirmed_directions, get_role_family, resume_fingerprint, suggest_directions,
+)
 from job_agent import (
     CandidateProfile,
     STATUSES,
@@ -263,6 +265,7 @@ class LocalHandler(BaseHTTPRequestHandler):
                     "jobs": [public_row(row) for row in reversed(rows)],
                     "queue": queue.read_text(encoding="utf-8") if queue.is_file() else "",
                     "api_key_ready": bool(os.getenv("OPENAI_API_KEY")),
+                    "role_families": ROLE_FAMILIES,
                 })
             except (OSError, ValueError) as exc:
                 self._json(400, {"error": str(exc)})
@@ -384,10 +387,12 @@ class LocalHandler(BaseHTTPRequestHandler):
                          "review": load_review(self.server.out, job.job_id)})
 
     def _directions(self, data: dict) -> None:
+        family = get_role_family(data.get("role_family", ""))
         resume = resume_from_request(data)
         profile = profile_from_request(data, resume)
         self._json(200, {
             "suggestions": suggest_directions(resume),
+            "role_family": family,
             "current_roles": profile.preferences.target_roles,
             "resume_fingerprint": resume_fingerprint(resume),
         })

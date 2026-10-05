@@ -1,6 +1,8 @@
 import unittest
 
 from direction_suggestions import (
+    ROLE_FAMILIES,
+    get_role_family,
     apply_confirmed_directions,
     resume_fingerprint,
     suggest_directions,
@@ -10,6 +12,23 @@ from test_job_agent import fixture
 
 
 class DirectionSuggestionChecks(unittest.TestCase):
+    def test_exploration_catalog_is_bounded_and_not_evidence(self):
+        self.assertEqual(len({family["id"] for family in ROLE_FAMILIES}), 7)
+        self.assertIsNone(get_role_family(""))
+        for family in ROLE_FAMILIES:
+            result = get_role_family(family["id"])
+            self.assertEqual(result, family)
+            self.assertNotIn("evidence", result)
+            self.assertLessEqual(len(result["roles"]), 5)
+            self.assertTrue(all(0 < len(role) <= 100 for role in result["roles"]))
+            result["roles"].clear()
+            self.assertTrue(family["roles"])
+
+    def test_invalid_exploration_category_is_rejected(self):
+        for value in ("invented", None, [], {}, 1):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "Unknown exploration"):
+                get_role_family(value)
+
     def test_synthetic_resume_suggestions_quote_only_resume_evidence(self):
         resume = fixture("synthetic_resume.md")
         suggestions = suggest_directions(resume)

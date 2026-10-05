@@ -7,6 +7,11 @@
 .direction-caution{margin:0 0 12px}
 .direction-status{margin:9px 2px 0}
 .direction-results{display:grid;gap:8px}
+.direction-section-title{font-size:12px;color:#235f52;margin:16px 0 8px}
+.direction-item button{margin-top:8px;padding:5px 9px;border:1px solid #b3d0c3;border-radius:6px;background:#e7f3eb;color:#276950;font-size:11px}
+.profile-advanced{margin-top:16px;border-top:1px solid #e2ebe5;padding-top:12px}
+.profile-advanced summary{cursor:pointer;font-size:12px;color:#52796c}
+.profile-advanced p{font-size:11px;line-height:1.6;color:#758b84}
 .direction-item{padding:10px 12px;border:1px solid #e2ebe5;border-radius:8px;background:#fbfdfb}
 .direction-item strong{display:block;font-size:12px;color:#235f52}
 .direction-item small{display:block;margin-top:6px;color:#6a817d;font-size:11px;line-height:1.5;overflow-wrap:anywhere}

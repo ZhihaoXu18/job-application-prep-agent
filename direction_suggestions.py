@@ -12,6 +12,29 @@ import re
 from job_agent import CandidateProfile
 
 
+# Exploration presets, never evidence of education, skills, or eligibility.
+ROLE_FAMILIES = (
+    {"id": "computing", "label": "计算机与软件", "roles": ["Software Developer Co-op", "QA Analyst Co-op", "IT Support Co-op"]},
+    {"id": "data", "label": "数据、数学与统计", "roles": ["Data Analyst Co-op", "Business Intelligence Co-op", "Data Engineering Co-op"]},
+    {"id": "business", "label": "商科与运营", "roles": ["Business Analyst Co-op", "Operations Co-op", "Marketing Co-op"]},
+    {"id": "engineering", "label": "工程与技术", "roles": ["Engineering Co-op", "Quality Engineering Co-op", "Technical Support Co-op"]},
+    {"id": "design", "label": "设计与产品", "roles": ["UX Design Co-op", "Product Design Co-op", "Product Management Co-op"]},
+    {"id": "science", "label": "自然科学与生命科学", "roles": ["Research Assistant Co-op", "Laboratory Assistant Co-op", "Environmental Science Co-op"]},
+    {"id": "humanities", "label": "人文、社会科学与传播", "roles": ["Communications Co-op", "Policy Research Co-op", "Community Programs Co-op"]},
+)
+
+
+def get_role_family(family_id: object) -> dict | None:
+    """Resolve an explicit exploration choice without inferring qualifications."""
+    if family_id == "":
+        return None
+    if isinstance(family_id, str):
+        for family in ROLE_FAMILIES:
+            if family["id"] == family_id:
+                return {**family, "roles": list(family["roles"])}
+    raise ValueError("Unknown exploration category. Choose a listed category or leave it undecided.")
+
+
 ROLE_SIGNALS = (
     ("Data Analyst Co-op", (
         r"\bsql\b", r"\bpython\b", r"\bexcel\b", r"data analy[sz]",

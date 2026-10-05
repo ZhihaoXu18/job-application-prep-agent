@@ -132,13 +132,45 @@ async function candidatePayload() {
   return payload;
 }
 
+function renderRoleFamilies(families) {
+  const select = $("roleFamily");
+  const previous = select.value;
+  select.replaceChildren();
+  const undecided = element("option", "", "暂不确定 · 从简历探索 / 手动填写");
+  undecided.value = "";
+  select.append(undecided);
+  for (const family of families) {
+    const option = element("option", "", family.label);
+    option.value = family.id;
+    select.append(option);
+  }
+  select.value = families.some((family) => family.id === previous) ? previous : "";
+}
+
 function invalidateDirections() {
   directionRequestVersion++;
   directionFingerprint = "";
   confirmedRoles = null;
   $("directionPanel").hidden = true;
   $("directionSearch").hidden = true;
-  $("directionStatus").textContent = "简历或 profile 已更改；如需使用方向建议，请重新分析并确认。";
+  $("directionStatus").textContent = "简历、大类或 profile 已更改；请重新展开方向并确认。";
+}
+
+function markDirectionsDirty() {
+  confirmedRoles = null;
+  $("directionSearch").hidden = true;
+  $("directionStatus").textContent = "方向有未确认的修改；请再次点击“确认这些方向”。";
+}
+
+function addExplorationRole(role) {
+  const roles = $("directionRoles").value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  if (roles.some((item) => item.toLocaleLowerCase() === role.toLocaleLowerCase())) return;
+  if (roles.length >= 5) {
+    $("directionStatus").textContent = "最多保留 5 个方向；请先在下方删掉不想探索的岗位。";
+    return;
+  }
+  $("directionRoles").value = [...roles, role].join("\n");
+  markDirectionsDirty();
 }
 
 async function suggestDirections() {
@@ -146,15 +178,32 @@ async function suggestDirections() {
   const version = ++directionRequestVersion;
   button.disabled = true;
   try {
+    const payload = {...await candidatePayload(), role_family: $("roleFamily").value};
+    if (version !== directionRequestVersion) return;
     const result = await api("/api/directions", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
-      body: JSON.stringify(await candidatePayload()),
+      body: JSON.stringify(payload),
     });
     if (version !== directionRequestVersion) return;
     directionFingerprint = result.resume_fingerprint;
     confirmedRoles = null;
     $("directionSearch").hidden = true;
+    const familyList = $("familyResults");
+    familyList.replaceChildren();
+    familyList.hidden = !result.role_family;
+    if (result.role_family) {
+      familyList.append(element("strong", "direction-section-title", `${result.role_family.label} · 可探索岗位（不是匹配结果）`));
+      for (const role of result.role_family.roles) {
+        const item = element("div", "direction-item");
+        item.append(element("strong", "", role));
+        const add = element("button", "", "＋ 添加到草案");
+        add.type = "button";
+        add.addEventListener("click", () => addExplorationRole(role));
+        item.append(add);
+        familyList.append(item);
+      }
+    }
     const list = $("directionResults");
     list.replaceChildren();
     for (const suggestion of result.suggestions) {
@@ -167,9 +216,9 @@ async function suggestDirections() {
       list.append(element("p", "direction-empty", "没有足够明确的线索；你仍可手动输入目标岗位。"));
     }
     $("directionRoles").value = (result.current_roles.length
-      ? result.current_roles : result.suggestions.map((item) => item.role)).join("\n");
+      ? result.current_roles : result.role_family?.roles || result.suggestions.map((item) => item.role)).join("\n");
     $("directionPanel").hidden = false;
-    $("directionStatus").textContent = "方向仅为草案；修改后点击“确认这些方向”才会用于新职位分析。";
+    $("directionStatus").textContent = (result.current_roles.length ? "已保留 profile 中的目标岗位；你可以添加大类岗位或手动编辑。" : "方向仅为草案。") + "点击“确认这些方向”后才会用于新职位分析。";
   } catch (error) {
     if (version === directionRequestVersion) {
       $("directionStatus").textContent = `无法分析方向：${error.message}`;
@@ -335,6 +384,7 @@ function renderJobs(jobs) {
 
 async function refreshState() {
   const state = await api("/api/state");
+  renderRoleFamilies(state.role_families || []);
   const notice = $("keyNotice");
   notice.className = `notice ${state.api_key_ready ? "ready" : "missing"}`;
   notice.textContent = state.api_key_ready
@@ -496,13 +546,10 @@ document.querySelectorAll('input[name="sourceType"]').forEach((radio) => radio.a
 $("resumeFile").addEventListener("change", () => { $("resumeFileName").textContent = $("resumeFile").files[0]?.name || "尚未选择文件"; invalidateDirections(); });
 $("resumeText").addEventListener("input", invalidateDirections);
 $("profileFile").addEventListener("change", () => { $("profileFileName").textContent = $("profileFile").files[0]?.name || "未提供则不假设偏好"; invalidateDirections(); });
+$("roleFamily").addEventListener("change", invalidateDirections);
 $("suggestDirections").addEventListener("click", suggestDirections);
 $("confirmDirections").addEventListener("click", confirmDirections);
-$("directionRoles").addEventListener("input", () => {
-  confirmedRoles = null;
-  $("directionSearch").hidden = true;
-  $("directionStatus").textContent = "方向有未确认的修改；请再次点击“确认这些方向”。";
-});
+$("directionRoles").addEventListener("input", markDirectionsDirty);
 $("prepareForm").addEventListener("submit", prepare);
 $("saveStatus").addEventListener("click", saveStatus);
 $("saveReview").addEventListener("click", saveReview);
