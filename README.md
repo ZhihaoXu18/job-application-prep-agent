@@ -91,6 +91,10 @@ Additional conservative guardrails reject model output outside the allowed term 
 
 Run the offline evidence and web checks with `python -m unittest -v test_job_agent.py test_web_ui.py`. The web tests use a local loopback port but do not contact an employer site or make paid API requests.
 
+### Export an application paragraph
+
+After editing your application paragraph, complete all three manual checks and save the review. **Download application paragraph** exports only the saved paragraph as UTF-8 plain text; private notes, checklists, and the generated packet are excluded. Changing the paragraph clears the claims check, and any unsaved edit disables this export until you review and save again. The server also rejects incomplete checks, empty drafts, and stale review revisions. This is your own approval record, not automated verification. Downloading does not submit an application or change its status. **Download working worksheet (includes notes)** remains available for private work. See [Day 11 export notes](docs/day-11-application-export.md).
+
 ## Record outcomes
 
 The first run prints a job ID. After applying or receiving an update, record it:

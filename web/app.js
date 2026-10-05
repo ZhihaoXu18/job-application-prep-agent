@@ -223,6 +223,13 @@ function reviewChecks() {
 function updateReviewProgress() {
   const count = Object.values(reviewChecks()).filter(Boolean).length;
   $("reviewProgress").textContent = `${count} / 3 已核对`;
+  const ready = Boolean(activeJob && activeReviewRevision && !reviewDirty &&
+    count === 3 && $("editedDraft").value.trim());
+  $("downloadApplication").disabled = !ready;
+  $("exportReadiness").textContent = ready
+    ? "可以下载。文件只包含已保存的申请段落，不含私人备注或审阅包。"
+    : reviewDirty ? "有未保存的修改；完成核对并保存后可下载。"
+    : "填写申请段落，完成三项核对并保存后可下载。";
 }
 
 function markReviewDirty() {
@@ -375,23 +382,28 @@ async function saveStatus() {
 async function saveReview() {
   if (!activeJob) return;
   const button = $("saveReview");
+  const jobId = activeJob.job_id;
+  const fields = {draft: $("editedDraft").value, notes: $("reviewNotes").value, checks: reviewChecks()};
   button.disabled = true;
   try {
     const result = await api("/api/review", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
       body: JSON.stringify({
-        job_id: activeJob.job_id,
-        draft: $("editedDraft").value,
-        notes: $("reviewNotes").value,
-        checks: reviewChecks(),
+        job_id: jobId,
+        ...fields,
         base_revision: activeReviewRevision,
       }),
     });
+    if (activeJob?.job_id !== jobId) return;
     activeReviewRevision = result.review.revision;
-    reviewDirty = false;
-    $("reviewSavedAt").textContent = `已保存于 ${result.review.saved_at}；原始生成包保持不变。`;
-    showNotice("人工审阅已保存在本机。没有向雇主发送任何内容。");
+    reviewDirty = fields.draft !== $("editedDraft").value || fields.notes !== $("reviewNotes").value ||
+      JSON.stringify(fields.checks) !== JSON.stringify(reviewChecks());
+    $("reviewSavedAt").textContent = reviewDirty
+      ? "先前版本已保存；当前仍有未保存的修改。"
+      : `已保存于 ${result.review.saved_at}；原始生成包保持不变。`;
+    updateReviewProgress();
+    showNotice(reviewDirty ? "先前版本已保存，请保存当前修改后再导出。" : "人工审阅已保存在本机。没有向雇主发送任何内容。");
   } catch (error) {
     showNotice(error.message, true);
   } finally {
@@ -399,14 +411,16 @@ async function saveReview() {
   }
 }
 
-function downloadText(name, contents) {
-  const blob = new Blob([contents], {type: "text/markdown;charset=utf-8"});
+function downloadText(name, contents, mime = "text/markdown") {
+  const blob = new Blob([contents], {type: `${mime};charset=utf-8`});
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = name;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(url);
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function downloadPacket() {
@@ -432,6 +446,28 @@ function downloadReviewed() {
   downloadText(`${activeJob.job_id}-my-review.md`, lines.join("\n"));
 }
 
+async function downloadApplication() {
+  if (!activeJob || $("downloadApplication").disabled) return;
+  const jobId = activeJob.job_id;
+  const revision = activeReviewRevision;
+  const button = $("downloadApplication");
+  button.disabled = true;
+  try {
+    const result = await api("/api/export", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
+      body: JSON.stringify({job_id: jobId, base_revision: revision}),
+    });
+    if (activeJob?.job_id !== jobId || reviewDirty || activeReviewRevision !== revision) return;
+    downloadText(result.filename, result.text, "text/plain");
+    showNotice("已请求下载申请段落，仅包含已保存的正文。请自行提交并在提交后记录申请状态。");
+  } catch (error) {
+    showNotice(error.message, true);
+  } finally {
+    updateReviewProgress();
+  }
+}
+
 document.querySelectorAll('input[name="sourceType"]').forEach((radio) => radio.addEventListener("change", syncSourceMode));
 $("resumeFile").addEventListener("change", () => { $("resumeFileName").textContent = $("resumeFile").files[0]?.name || "尚未选择文件"; invalidateDirections(); });
 $("resumeText").addEventListener("input", invalidateDirections);
@@ -448,6 +484,8 @@ $("saveStatus").addEventListener("click", saveStatus);
 $("saveReview").addEventListener("click", saveReview);
 $("downloadPacket").addEventListener("click", downloadPacket);
 $("downloadReviewed").addEventListener("click", downloadReviewed);
+$("downloadApplication").addEventListener("click", downloadApplication);
+$("editedDraft").addEventListener("input", () => { $("checkClaims").checked = false; });
 for (const id of ["editedDraft", "reviewNotes", "checkPosting", "checkTerm", "checkClaims"]) {
   $(id).addEventListener("input", markReviewDirty);
   $(id).addEventListener("change", markReviewDirty);

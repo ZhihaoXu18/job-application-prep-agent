@@ -13,4 +13,10 @@
 .review-save:hover{background:#28705c}
 .review-export{background:#f0f7f2;border:1px solid #c5ded0;color:#2a7056}
 .review-saved{color:#839692;font-size:11px;margin:10px 1px 0}
+.application-export{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #c5ded0;background:#f0f7f2;border-radius:10px;padding:14px;margin-top:18px}
+.application-export strong{font-size:13px;color:#2a7056}
+.application-export p{font-size:12px;color:#476260;line-height:1.6;margin:5px 0 0}
+.application-export button{flex-shrink:0;border-radius:9px;padding:10px 14px;font-size:12px;font-weight:750}
+.application-export button:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:640px){.application-export{align-items:stretch;flex-direction:column}}
 @media(max-width:640px){.review-actions{flex-direction:column}.review-actions button{width:100%}}

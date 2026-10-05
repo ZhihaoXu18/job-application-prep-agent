@@ -301,6 +301,8 @@ class LocalHandler(BaseHTTPRequestHandler):
                 self._feedback(data)
             elif self.path == "/api/review":
                 self._review(data)
+            elif self.path == "/api/export":
+                self._export(data)
             else:
                 self._json(404, {"error": "Not found."})
         except ReviewConflict as exc:
@@ -393,6 +395,29 @@ class LocalHandler(BaseHTTPRequestHandler):
         # Refuse to edit a review when its source packet is no longer available.
         packet_for_row(row, self.server.out)
         self._json(200, {"review": save_review(self.server.out, job_id, data)})
+
+    def _export(self, data: dict) -> None:
+        job_id = data.get("job_id")
+        if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
+            raise ValueError("Invalid job ID.")
+        row = next((item for item in read_tracker(self.server.out / "applications.csv")
+                    if item.get("job_id") == job_id), None)
+        if row is None:
+            raise ValueError("Job ID not found in tracker.")
+        packet_for_row(row, self.server.out)
+        review = load_review(self.server.out, job_id)
+        if not review["saved"]:
+            raise ValueError("Save your manual review before exporting the application paragraph.")
+        if data.get("base_revision") != review["revision"]:
+            raise ReviewConflict("This review changed in another tab. Reopen the job before exporting.")
+        if not all(review["checks"].values()):
+            raise ValueError("Complete all three manual checks and save before exporting.")
+        if not review["draft"].strip():
+            raise ValueError("Write an application paragraph and save before exporting.")
+        self._json(200, {
+            "filename": f"{job_id}-application.txt",
+            "text": review["draft"].strip() + "\n",
+        })
 
     def _feedback(self, data: dict) -> None:
         job_id, status = data.get("job_id"), data.get("status")

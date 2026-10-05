@@ -264,5 +264,69 @@ class LocalHTTPChecks(unittest.TestCase):
         self.assertFalse(review_path(self.out, payload["job_id"]).exists())
 
 
+    def saved_export_review(self, job_id, **overrides):
+        payload = {
+            "job_id": job_id, "draft": "My reviewed application paragraph.",
+            "notes": "PRIVATE: follow up with my adviser.",
+            "checks": {"posting_status": True, "term_and_dates": True,
+                       "resume_and_draft": True}, "base_revision": "",
+        }
+        payload.update(overrides)
+        status, _, raw = self.request("POST", "/api/review", payload)
+        self.assertEqual(status, 200)
+        return json.loads(raw)["review"]
+
+    def test_application_export_contains_only_saved_draft_and_does_not_mutate(self):
+        job_id = self.prepare_synthetic()["job"]["job_id"]
+        saved = self.saved_export_review(job_id)
+        before = {path: path.read_bytes() for path in self.out.rglob("*") if path.is_file()}
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}), patch("job_agent.make_analysis") as analyzed:
+            status, headers, raw = self.request("POST", "/api/export", {
+                "job_id": job_id, "base_revision": saved["revision"],
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        result = json.loads(raw)
+        self.assertEqual(result["text"], saved["draft"] + "\n")
+        self.assertEqual(result["filename"], f"{job_id}-application.txt")
+        self.assertNotIn("PRIVATE", raw.decode())
+        after = {path: path.read_bytes() for path in self.out.rglob("*") if path.is_file()}
+        self.assertEqual(before, after)
+        analyzed.assert_not_called()
+
+    def test_export_requires_saved_nonempty_draft_and_all_manual_checks(self):
+        job_id = self.prepare_synthetic()["job"]["job_id"]
+        status, _, _ = self.request("POST", "/api/export", {"job_id": "a" * 12})
+        self.assertEqual(status, 400)
+        status, _, raw = self.request("POST", "/api/export", {"job_id": job_id})
+        self.assertEqual(status, 400)
+        self.assertIn(b"Save your manual review", raw)
+        saved = self.saved_export_review(job_id, checks={
+            "posting_status": False, "term_and_dates": True, "resume_and_draft": True,
+        })
+        status, _, raw = self.request("POST", "/api/export", {
+            "job_id": job_id, "base_revision": saved["revision"],
+        })
+        self.assertEqual(status, 400)
+        self.assertIn(b"all three manual checks", raw)
+        saved = self.saved_export_review(job_id, draft=" \n ", base_revision=saved["revision"])
+        status, _, raw = self.request("POST", "/api/export", {
+            "job_id": job_id, "base_revision": saved["revision"],
+        })
+        self.assertEqual(status, 400)
+        self.assertIn(b"Write an application paragraph", raw)
+
+    def test_export_rejects_stale_revision_and_cross_origin(self):
+        job_id = self.prepare_synthetic()["job"]["job_id"]
+        saved = self.saved_export_review(job_id)
+        self.saved_export_review(job_id, draft="Newer paragraph.", base_revision=saved["revision"])
+        payload = {"job_id": job_id, "base_revision": saved["revision"]}
+        status, _, raw = self.request("POST", "/api/export", payload)
+        self.assertEqual(status, 409)
+        self.assertIn(b"Reopen the job", raw)
+        status, _, _ = self.request("POST", "/api/export", payload, {"Origin": "https://attacker.example"})
+        self.assertEqual(status, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

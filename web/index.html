@@ -89,8 +89,9 @@
               <textarea id="editedDraft" rows="6" maxlength="5000" placeholder="在这里修改申请段落；不要加入履历或职位原文没有支持的事实。"></textarea>
               <label class="field-label" for="reviewNotes">私人备注 <span>不会发送给雇主</span></label>
               <textarea id="reviewNotes" rows="3" maxlength="10000" placeholder="记录待确认的问题、修改原因或下一步……"></textarea>
-              <div class="review-actions"><button id="saveReview" class="review-save" type="button">保存本地审阅</button><button id="downloadReviewed" class="review-export" type="button">下载审阅稿 ↓</button></div>
+              <div class="review-actions"><button id="saveReview" class="review-save" type="button">保存本地审阅</button><button id="downloadReviewed" class="review-export" type="button">下载工作底稿（含备注）↓</button></div>
               <p id="reviewSavedAt" class="review-saved" role="status">尚未保存；原始生成包不会被修改。</p>
+              <div class="application-export"><div><strong>申请段落 · 纯文本</strong><p id="exportReadiness" role="status">完成三项核对并保存后可下载。</p></div><button id="downloadApplication" class="review-save" type="button" disabled>下载申请段落 ↓</button></div>
             </div>
             <div class="status-box"><div><strong>记录进展</strong><p>只更新本地 tracker；不会向雇主发送任何内容。</p></div><div class="status-actions"><select id="statusSelect" aria-label="申请状态"><option value="prepared">已准备</option><option value="applied">我已自行申请</option><option value="interview">面试</option><option value="rejected">未通过</option><option value="no_response">暂无回复</option><option value="offer">收到 offer</option></select><button id="saveStatus" type="button">保存</button></div></div>
           </div>
