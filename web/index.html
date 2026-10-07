@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="/packet.css">
   <link rel="stylesheet" href="/review.css">
   <link rel="stylesheet" href="/direction.css">
+  <link rel="stylesheet" href="/evidence.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -37,6 +38,17 @@
               <label class="file-field" for="resumeFile"><span>选择履历文件</span><input id="resumeFile" type="file" accept=".pdf,.txt,.md"><small id="resumeFileName">尚未选择文件</small></label>
               <label class="field-label" for="resumeText">或粘贴履历文字 <span>粘贴内容优先</span></label>
               <textarea id="resumeText" rows="4" placeholder="在这里粘贴履历正文……"></textarea>
+              <div class="evidence-start"><div><strong>先整理你的经历证据</strong><p>不需要职位信息或模型密钥。把识别到的能力线索分成实践、课程、学习中和待确认。</p></div><button id="analyzeEvidence" type="button">整理简历证据</button></div>
+              <section id="evidencePanel" class="evidence-panel" aria-labelledby="evidenceTitle" hidden>
+                <h4 id="evidenceTitle">经历证据初稿</h4>
+                <p class="evidence-caution">本地规则仅识别部分中英文标签，不代表完整理解简历或证明熟练度。请对照原文改类型、删标签或排除误判；个人备注不作为事实。此初稿不自动用于申请材料。</p>
+                <p id="evidenceSummary" class="evidence-summary" aria-live="polite"></p>
+                <p id="evidenceWarnings" class="evidence-caution"></p>
+                <div id="evidenceRows" class="evidence-rows"></div>
+                <label class="evidence-attestation"><input id="evidenceChecked" type="checkbox"><span>我已逐条对照简历原文核对保留的线索；类型和标签只是我的审阅记录，不是资格认证。</span></label>
+                <div class="evidence-actions"><button id="confirmEvidence" type="button" disabled>确认本页证据</button><button id="downloadEvidence" type="button" disabled>下载私人证据草稿 ↓</button></div>
+              </section>
+              <p id="evidenceStatus" class="evidence-status" role="status">证据草稿仅保留在当前页面；刷新会清空。可下载后自行保管，不会写入申请记录。</p>
             </div>
 
             <div class="form-block">

@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 from direction_suggestions import (
     ROLE_FAMILIES, apply_confirmed_directions, get_role_family, resume_fingerprint, suggest_directions,
 )
+from resume_evidence import extract_resume_evidence, review_resume_evidence
 from job_agent import (
     CandidateProfile,
     STATUSES,
@@ -247,10 +248,11 @@ class LocalHandler(BaseHTTPRequestHandler):
             self._json(403, {"error": "Local origin required."})
             return
         parsed = urlsplit(self.path)
-        if parsed.path in {"/", "/app.css", "/packet.css", "/review.css", "/direction.css", "/app.js"}:
+        if parsed.path in {"/", "/app.css", "/packet.css", "/review.css", "/direction.css", "/evidence.css", "/app.js"}:
             filename = {"/": "index.html", "/app.css": "app.css",
                         "/packet.css": "packet.css", "/review.css": "review.css",
                         "/direction.css": "direction.css",
+                        "/evidence.css": "evidence.css",
                         "/app.js": "app.js"}[parsed.path]
             mime = "text/html" if filename.endswith(".html") else (
                 "text/css" if filename.endswith(".css") else "application/javascript"
@@ -308,6 +310,10 @@ class LocalHandler(BaseHTTPRequestHandler):
                 self._prepare(data)
             elif self.path == "/api/directions":
                 self._directions(data)
+            elif self.path == "/api/resume-evidence":
+                self._json(200, extract_resume_evidence(resume_from_request(data)))
+            elif self.path == "/api/resume-evidence/review":
+                self._json(200, review_resume_evidence(resume_from_request(data), data))
             elif self.path == "/api/feedback":
                 self._feedback(data)
             elif self.path == "/api/review":

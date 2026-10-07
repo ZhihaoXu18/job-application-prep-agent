@@ -11,6 +11,7 @@ from unittest.mock import patch
 from direction_suggestions import resume_fingerprint
 from job_agent import read_tracker, record_status
 from test_job_agent import fixture, make_analysis
+from test_resume_evidence import review_payload
 from web_ui import LocalServer, packet_for_row, resume_from_request, review_path
 
 
@@ -108,6 +109,9 @@ class LocalHTTPChecks(unittest.TestCase):
         status, _, stylesheet = self.request("GET", "/direction.css")
         self.assertEqual(status, 200)
         self.assertIn(b"direction-panel", stylesheet)
+        status, _, stylesheet = self.request("GET", "/evidence.css")
+        self.assertEqual(status, 200)
+        self.assertIn(b"evidence-row", stylesheet)
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
             status, _, raw = self.request("GET", "/api/state")
         self.assertEqual(status, 200)
@@ -136,6 +140,36 @@ class LocalHTTPChecks(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn(b"OPENAI_API_KEY", raw)
         fetched.assert_not_called()
+
+    def test_resume_evidence_and_review_need_no_key_posting_or_profile(self):
+        payload = {"resume_text": fixture("synthetic_resume.md")}
+        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}), patch("job_agent.make_analysis") as model:
+            status, _, raw = self.request("POST", "/api/resume-evidence", payload)
+            self.assertEqual(status, 200)
+            draft = json.loads(raw)
+            self.assertTrue(draft["evidence"])
+            edits = review_payload(draft)
+            edits["evidence_edits"][0]["kind"] = "mentioned"
+            status, _, raw = self.request("POST", "/api/resume-evidence/review", {**payload, **edits})
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertTrue(result["reviewed"])
+        self.assertEqual(result["evidence"][0]["kind"], "mentioned")
+        self.assertFalse(self.out.exists())
+        model.assert_not_called()
+
+    def test_evidence_review_rejects_changed_resume_and_source_tampering(self):
+        payload = {"resume_text": fixture("synthetic_resume.md")}
+        _, _, raw = self.request("POST", "/api/resume-evidence", payload)
+        edits = review_payload(json.loads(raw))
+        status, _, _ = self.request("POST", "/api/resume-evidence/review", {
+            **payload, **edits, "resume_text": payload["resume_text"] + " changed",
+        })
+        self.assertEqual(status, 400)
+        edits["evidence_edits"][0]["quote"] = "Invented quote"
+        status, _, _ = self.request("POST", "/api/resume-evidence/review", {**payload, **edits})
+        self.assertEqual(status, 400)
+        self.assertFalse(self.out.exists())
 
     def test_directions_work_without_key_and_confirmed_roles_reach_analysis(self):
         payload = self.prepare_payload()

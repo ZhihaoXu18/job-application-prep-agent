@@ -6,6 +6,12 @@ let reviewDirty = false;
 let directionFingerprint = "";
 let confirmedRoles = null;
 let directionRequestVersion = 0;
+let evidenceFingerprint = "";
+let evidenceRequestVersion = 0;
+let evidenceEditVersion = 0;
+let evidenceDraft = null;
+let evidenceControls = [];
+let confirmedEvidence = null;
 const termLabels = {"8_month_confirmed": "8 个月已确认", "4_month_only": "仅 4 个月", "variable_or_unclear": "任期待确认"};
 const statusLabels = {prepared: "已准备", applied: "已申请", interview: "面试", rejected: "未通过", no_response: "暂无回复", offer: "收到 offer"};
 
@@ -130,6 +136,130 @@ async function candidatePayload() {
   const file = $("resumeFile").files[0];
   if (!payload.resume_text.trim() && file) payload.resume_file = await encodedFile(file);
   return payload;
+}
+
+function updateEvidenceReadiness() {
+  $("confirmEvidence").disabled = !(evidenceFingerprint && $("evidenceChecked").checked);
+  $("downloadEvidence").disabled = !confirmedEvidence;
+}
+
+function markEvidenceDirty() {
+  evidenceEditVersion++;
+  confirmedEvidence = null;
+  $("evidenceChecked").checked = false;
+  $("evidenceStatus").textContent = "证据有未确认的修改；请重新核对后确认。";
+  updateEvidenceReadiness();
+}
+
+function invalidateResumeEvidence() {
+  evidenceRequestVersion++;
+  evidenceFingerprint = "";
+  evidenceDraft = null;
+  evidenceControls = [];
+  confirmedEvidence = null;
+  $("evidenceChecked").checked = false;
+  $("evidencePanel").hidden = true;
+  $("evidenceStatus").textContent = "简历已更改；请重新整理证据。草稿不会保存到服务器。";
+  updateEvidenceReadiness();
+}
+
+function evidenceField(labelText, control) {
+  const label = element("label", "evidence-field", labelText);
+  label.append(control);
+  return label;
+}
+
+function renderEvidence(draft) {
+  evidenceControls = [];
+  const root = $("evidenceRows");
+  root.replaceChildren();
+  const counts = {};
+  for (const row of draft.evidence) counts[row.kind] = (counts[row.kind] || 0) + 1;
+  $("evidenceSummary").textContent = `初稿识别 ${draft.evidence.length} 条原文线索 · ` +
+    Object.entries(counts).map(([kind, count]) => `${draft.kind_labels[kind]} ${count}`).join(" / ");
+  $("evidenceWarnings").textContent = draft.omitted_fragments
+    ? `另有 ${draft.omitted_fragments} 条因长度或数量限制未展示；请将长段落换行后再试。`
+    : "未显示的能力不代表你不会；这里不是完整技能清单。";
+  if (!draft.evidence.length) root.append(element("p", "evidence-caution", "没有识别到目录中的能力标签。请保留原始简历；这不代表没有相关经历。"));
+  for (const row of draft.evidence) {
+    const card = element("article", "evidence-row");
+    card.append(element("strong", "", row.labels.join(" · ")));
+    card.append(element("p", "evidence-source", `原文第 ${row.line} 行${row.section ? ` · ${row.section}` : ""}`));
+    card.append(element("blockquote", "", row.quote));
+    const kind = element("select", "");
+    for (const [value, text] of Object.entries(draft.kind_labels)) {
+      const option = element("option", "", text); option.value = value; kind.append(option);
+    }
+    kind.value = row.kind;
+    const labels = element("input", ""); labels.type = "text"; labels.value = row.labels.join(", ");
+    const included = element("input", ""); included.type = "checkbox"; included.checked = row.included;
+    const includeLabel = element("label", "evidence-include");
+    includeLabel.append(included, element("span", "", "保留这条线索（否定表述保留也不代表正向技能）"));
+    const note = element("textarea", ""); note.rows = 2; note.maxLength = 500; note.value = row.note;
+    card.append(evidenceField("表述类型", kind), evidenceField("能力标签（逗号分隔；只能删掉已有标签）", labels), includeLabel);
+    const details = element("details", "");
+    details.append(element("summary", "", "个人备注（不作为事实）"), evidenceField("备注", note)); card.append(details);
+    for (const control of [kind, labels, included, note]) {
+      control.addEventListener("input", markEvidenceDirty);
+      control.addEventListener("change", markEvidenceDirty);
+    }
+    evidenceControls.push({id: row.id, kind, labels, included, note});
+    root.append(card);
+  }
+  $("evidencePanel").hidden = false;
+}
+
+async function analyzeResumeEvidence() {
+  const version = ++evidenceRequestVersion;
+  const button = $("analyzeEvidence"); button.disabled = true;
+  evidenceFingerprint = ""; confirmedEvidence = null; evidenceDraft = null;
+  $("evidencePanel").hidden = true; $("evidenceChecked").checked = false; updateEvidenceReadiness();
+  $("evidenceStatus").textContent = "正在本机整理证据初稿……";
+  try {
+    const payload = await candidatePayload();
+    if (version !== evidenceRequestVersion) return;
+    const draft = await api("/api/resume-evidence", {
+      method: "POST", headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
+      body: JSON.stringify(payload),
+    });
+    if (version !== evidenceRequestVersion) return;
+    evidenceFingerprint = draft.resume_fingerprint; evidenceDraft = draft;
+    renderEvidence(draft);
+    $("evidenceStatus").textContent = "这是本地规则初稿。请核对、纠正或排除；确认后可下载私人草稿，尚不自动用于职位匹配或申请。";
+  } catch (error) {
+    if (version === evidenceRequestVersion) $("evidenceStatus").textContent = `无法整理：${error.message}`;
+  } finally {
+    button.disabled = false; updateEvidenceReadiness();
+  }
+}
+
+async function confirmResumeEvidence() {
+  if (!evidenceFingerprint || !$("evidenceChecked").checked) return;
+  const version = evidenceRequestVersion, editVersion = evidenceEditVersion;
+  const fingerprint = evidenceFingerprint;
+  const edits = evidenceControls.map(({id, kind, labels, included, note}) => ({
+    id, kind: kind.value, labels: labels.value.split(/[,，]/).map(text => text.trim()).filter(Boolean),
+    included: included.checked, note: note.value,
+  }));
+  $("confirmEvidence").disabled = true;
+  try {
+    const payload = {...await candidatePayload(), evidence_fingerprint: fingerprint, evidence_edits: edits};
+    if (version !== evidenceRequestVersion || editVersion !== evidenceEditVersion) return;
+    const result = await api("/api/resume-evidence/review", {
+      method: "POST", headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"},
+      body: JSON.stringify(payload),
+    });
+    if (version !== evidenceRequestVersion || editVersion !== evidenceEditVersion || !$("evidenceChecked").checked) return;
+    confirmedEvidence = result;
+    $("evidenceStatus").textContent = "已核对原文位置并记录你的修改。仅保留在本页，可下载私人草稿；不是资格认证，也不会自动进入申请材料。";
+  } catch (error) {
+    if (version === evidenceRequestVersion && editVersion === evidenceEditVersion) $("evidenceStatus").textContent = `无法确认：${error.message}`;
+  } finally { updateEvidenceReadiness(); }
+}
+
+function downloadResumeEvidence() {
+  if (!confirmedEvidence) return;
+  downloadText("private-resume-evidence.json", JSON.stringify(confirmedEvidence, null, 2), "application/json");
 }
 
 function renderRoleFamilies(families) {
@@ -545,6 +675,12 @@ async function downloadApplication() {
 document.querySelectorAll('input[name="sourceType"]').forEach((radio) => radio.addEventListener("change", syncSourceMode));
 $("resumeFile").addEventListener("change", () => { $("resumeFileName").textContent = $("resumeFile").files[0]?.name || "尚未选择文件"; invalidateDirections(); });
 $("resumeText").addEventListener("input", invalidateDirections);
+$("resumeFile").addEventListener("change", invalidateResumeEvidence);
+$("resumeText").addEventListener("input", invalidateResumeEvidence);
+$("analyzeEvidence").addEventListener("click", analyzeResumeEvidence);
+$("confirmEvidence").addEventListener("click", confirmResumeEvidence);
+$("downloadEvidence").addEventListener("click", downloadResumeEvidence);
+$("evidenceChecked").addEventListener("change", () => { evidenceEditVersion++; confirmedEvidence = null; updateEvidenceReadiness(); });
 $("profileFile").addEventListener("change", () => { $("profileFileName").textContent = $("profileFile").files[0]?.name || "未提供则不假设偏好"; invalidateDirections(); });
 $("roleFamily").addEventListener("change", invalidateDirections);
 $("suggestDirections").addEventListener("click", suggestDirections);

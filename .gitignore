@@ -5,6 +5,7 @@ __pycache__/
 .env.*
 profile*.json
 !profile.example.json
+private-resume-evidence*.json
 *.pdf
 *.docx
 posting.txt

@@ -1,0 +1,24 @@
+.evidence-start{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding:14px;background:#f3f8f5;border-radius:11px}
+.evidence-start strong,.evidence-panel h4{font-size:13px;color:#22594e}
+.evidence-start p,.evidence-caution,.evidence-status{font-size:11px;color:#6b8580;line-height:1.6}
+.evidence-start p{margin:5px 0 0}
+.evidence-start button,.evidence-actions button{flex:none;border:1px solid #b3d0c3;border-radius:8px;padding:9px 12px;background:#e7f3eb;color:#276950;font-size:12px;font-weight:700}
+.evidence-panel{margin-top:14px;border:1px solid #dce9e2;border-radius:11px;padding:14px}
+.evidence-panel h4{margin:0 0 8px}
+.evidence-summary{font-size:12px;color:#235f52;line-height:1.7}
+.evidence-rows{display:grid;gap:12px}
+.evidence-row{padding:12px;border:1px solid #e2ebe5;border-radius:8px;background:#fbfdfb}
+.evidence-row strong{display:block;font-size:12px;color:#235f52;overflow-wrap:anywhere}
+.evidence-source{margin:7px 0;color:#52796c;font-size:11px;overflow-wrap:anywhere}
+.evidence-row blockquote{margin:8px 0;padding-left:10px;border-left:2px solid #b3d0c3;font-size:12px;line-height:1.6;color:#374d47;white-space:pre-wrap;overflow-wrap:anywhere}
+.evidence-field{display:block;margin-top:9px;font-size:11px;color:#52796c}
+.evidence-field input,.evidence-field select,.evidence-field textarea{display:block;margin-top:5px;font-size:12px}
+.evidence-field input{width:100%;border:1px solid #d8e4df;background:#fff;border-radius:10px;padding:10px 12px;color:#1b3033}
+.evidence-field input:focus-visible{outline:2px solid #3a927d;outline-offset:2px}
+.evidence-include,.evidence-attestation{display:flex;gap:8px;align-items:flex-start;margin-top:12px;font-size:11px;line-height:1.6;color:#52796c}
+.evidence-include input,.evidence-attestation input{width:14px;flex:none;margin-top:3px;accent-color:#276950}
+.evidence-row details{margin-top:9px;font-size:11px;color:#52796c}
+.evidence-row summary{cursor:pointer}
+.evidence-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.evidence-actions button:disabled{opacity:.5;cursor:not-allowed}
+@media(max-width:550px){.evidence-start{align-items:flex-start;flex-direction:column}}

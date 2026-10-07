@@ -10,6 +10,7 @@ import hashlib
 import re
 
 from job_agent import CandidateProfile
+from resume_evidence import resume_fragments
 
 
 # Exploration presets, never evidence of education, skills, or eligibility.
@@ -65,7 +66,8 @@ def resume_fingerprint(resume: str) -> str:
 
 def suggest_directions(resume: str) -> list[dict[str, object]]:
     """Return at most three role families with two distinct resume signals each."""
-    lines = [line.strip() for line in resume.splitlines() if line.strip()]
+    lines = [item["quote"] for item in resume_fragments(resume)
+             if item["kind"] != "negated" and len(item["quote"]) <= 2000]
     candidates: list[tuple[int, int, dict[str, object]]] = []
     for order, (role, signals) in enumerate(ROLE_SIGNALS):
         evidence: list[str] = []
@@ -76,7 +78,7 @@ def suggest_directions(resume: str) -> list[dict[str, object]]:
                 continue
             matched += 1
             if source_line not in evidence and len(evidence) < 3:
-                evidence.append(source_line[:240])
+                evidence.append(source_line)
         if matched >= 2:
             candidates.append((-matched, order, {"role": role, "evidence": evidence}))
     candidates.sort(key=lambda item: (item[0], item[1]))
