@@ -12,6 +12,7 @@ from direction_suggestions import resume_fingerprint
 from job_agent import read_tracker, record_status
 from test_job_agent import fixture, make_analysis
 from test_resume_evidence import review_payload
+from test_direction_report import SYNTHETIC_RESUME, report_payload
 from web_ui import LocalServer, packet_for_row, resume_from_request, review_path
 
 
@@ -169,6 +170,41 @@ class LocalHTTPChecks(unittest.TestCase):
         edits["evidence_edits"][0]["quote"] = "Invented quote"
         status, _, _ = self.request("POST", "/api/resume-evidence/review", {**payload, **edits})
         self.assertEqual(status, 400)
+        self.assertFalse(self.out.exists())
+
+    def test_direction_report_needs_no_key_or_posting_and_writes_nothing(self):
+        payload = {"resume_text": SYNTHETIC_RESUME, **report_payload()}
+        with (patch.dict(os.environ, {"OPENAI_API_KEY": ""}),
+              patch("job_agent.make_analysis") as model, patch("web_ui.fetch_job") as fetched):
+            status, _, raw = self.request("POST", "/api/direction-report", payload)
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertEqual(len(result["reports"]), 3)
+        self.assertEqual(result["current_roles"], [])
+        model.assert_not_called()
+        fetched.assert_not_called()
+        self.assertFalse(self.out.exists())
+
+    def test_direction_report_rejects_unreviewed_stale_or_cross_origin(self):
+        payload = {"resume_text": SYNTHETIC_RESUME, **report_payload()}
+        for overrides in ({"evidence_review_confirmed": False},
+                          {"resume_text": SYNTHETIC_RESUME + " changed"}):
+            with self.subTest(overrides=overrides):
+                status, _, _ = self.request("POST", "/api/direction-report", {**payload, **overrides})
+                self.assertEqual(status, 400)
+        status, _, _ = self.request("POST", "/api/direction-report", payload, {"Origin": "https://attacker.example"})
+        self.assertEqual(status, 403)
+        self.assertFalse(self.out.exists())
+
+    def test_direction_report_keeps_profile_targets_separate_from_evidence(self):
+        resume = fixture("synthetic_resume.md")
+        payload = {"resume_text": resume, **report_payload(resume, "finance"),
+                   "profile_json": (Path(__file__).parent / "profile.example.json").read_text()}
+        status, _, raw = self.request("POST", "/api/direction-report", payload)
+        self.assertEqual(status, 200)
+        result = json.loads(raw)
+        self.assertEqual(result["current_roles"], ["Data Analyst Co-op", "Business Intelligence Co-op"])
+        self.assertEqual({item["family"] for item in result["reports"]}, {"finance"})
         self.assertFalse(self.out.exists())
 
     def test_directions_work_without_key_and_confirmed_roles_reach_analysis(self):

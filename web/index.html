@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Co-op Prep · 本地审阅台</title>
-  <link rel="stylesheet" href="/app.css">
-  <link rel="stylesheet" href="/packet.css">
-  <link rel="stylesheet" href="/review.css">
-  <link rel="stylesheet" href="/direction.css">
-  <link rel="stylesheet" href="/evidence.css">
-  <script src="/app.js" defer></script>
+  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="packet.css">
+  <link rel="stylesheet" href="review.css">
+  <link rel="stylesheet" href="direction.css">
+  <link rel="stylesheet" href="evidence.css">
+  <script src="app.js" defer></script>
 </head>
 <body>
   <div class="page-shell">
@@ -23,15 +23,16 @@
       <section class="hero">
         <div class="eyebrow">JOB APPLICATION WORKSPACE <span>·</span> LOCAL PREVIEW</div>
         <h1>把职位信息变成<br><span>可核对的申请准备材料。</span></h1>
-        <p>上传履历、提供雇主职位页面或粘贴正文。系统生成带来源引句的审阅包；事实、日期和最终申请都由你确认。</p>
+        <p>还没确定投什么？先整理履历证据，再探索金融 / 数据岗位方向。有具体职位后，再生成带来源引句的审阅包；最终申请由你确认。</p>
         <div class="hero-pills"><span>01 输入资料</span><span>02 核对证据</span><span>03 自行提交</span></div>
       </section>
 
       <div id="keyNotice" class="notice" role="status"></div>
+      <div id="fileNotice" class="notice" hidden><strong>你正在查看 HTML 文件，后端功能尚未连接。</strong><p>请先启动本地服务，再打开 <a href="http://127.0.0.1:8765/">默认预览（8765）</a>，或 <a href="http://127.0.0.1:8766/">自定义预览（8766）</a>。这个平台目前仅在本机运行。</p></div>
 
       <div class="workspace-grid">
         <section class="panel input-panel" aria-labelledby="prepareTitle">
-          <div class="panel-heading"><div><span class="step-label">01 / PREPARE</span><h2 id="prepareTitle">准备一个职位</h2></div><span class="panel-icon">↗</span></div>
+          <div class="panel-heading"><div><span class="step-label">01 / PREPARE</span><h2 id="prepareTitle">探索方向 / 准备职位</h2></div><span class="panel-icon">↗</span></div>
           <form id="prepareForm">
             <div class="form-block">
               <div class="block-heading"><span class="block-number">1</span><div><h3>你的履历</h3><p>支持文本型 PDF、TXT、Markdown，或直接粘贴文字。</p></div></div>
@@ -56,14 +57,21 @@
               <label class="field-label" for="roleFamily">你想探索哪个大类？ <span>不是专业或资格认证</span></label>
               <select id="roleFamily"><option value="">暂不确定 · 从简历探索 / 手动填写</option></select>
               <div class="direction-start">
-                <div><strong>大类 → 岗位方向 → 你的确认</strong><p>先在第 1 步提供简历。大类给你探索用的岗位示例，简历线索单独展示。</p></div>
-                <button id="suggestDirections" type="button">展开岗位方向</button>
+                <div><strong>确认的证据 → 方向报告 → 你的选择</strong><p>先确认第 1 步证据，再查看金融 / 数据的探索主题和原文依据。不需要填写第 3 步。</p></div>
+                <button id="generateDirectionReport" type="button" disabled>生成证据方向报告</button>
               </div>
+              <p id="directionReportStatus" class="direction-status" role="status">先整理并确认简历证据，再生成报告；不需要 API 密钥。</p>
+              <section id="directionReportPanel" class="direction-report" aria-labelledby="directionReportTitle" hidden>
+                <h4 id="directionReportTitle">证据方向报告</h4><p id="directionReportScope" class="direction-caution"></p>
+                <p id="directionReportOrdering" class="direction-caution"></p><div id="directionReportResults"></div>
+                <button id="downloadDirectionReport" type="button" disabled>下载私人方向报告 ↓</button><p class="direction-caution">下载含简历原文，不含私人备注；请自行保管，不要直接发送给雇主。刷新会清空本页报告。</p>
+              </section>
+              <details class="profile-advanced"><summary>其他大类 / 快速探索（无需确认简历证据）</summary><p>固定大类目录和原始关键词提示仍可使用；它们不会使用你排除或修改的证据，也不是上述方向报告。</p><button id="suggestDirections" type="button">展开岗位方向</button></details>
               <div id="directionPanel" class="direction-panel" hidden>
                 <p class="direction-caution">大类岗位是探索示例，不代表你已匹配。简历线索也不是资格判断；此步骤不会调用模型、搜索网站或保存简历。</p>
                 <div id="familyResults" class="direction-results" hidden></div>
-                <h4 class="direction-section-title">简历中的关键词线索</h4>
-                <div id="directionResults" class="direction-results" aria-live="polite"></div>
+                <div id="directionKeywordBlock"><h4 class="direction-section-title">简历中的关键词线索</h4>
+                <div id="directionResults" class="direction-results" aria-live="polite"></div></div>
                 <label class="field-label" for="directionRoles">你确认的目标岗位 <span>每行一个，最多 5 个</span></label>
                 <textarea id="directionRoles" rows="3" placeholder="例如 Data Analyst Co-op"></textarea>
                 <button id="confirmDirections" class="direction-confirm" type="button">确认这些方向</button>

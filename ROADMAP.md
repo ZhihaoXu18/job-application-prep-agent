@@ -1,5 +1,7 @@
 # Eight-week project plan
 
+This is the original long-term roadmap. The active three-week delivery sequence and Day 8–14 acceptance are tracked in [THREE_WEEK_PLAN.md](THREE_WEEK_PLAN.md) and [week-2 acceptance](docs/week-2-acceptance.md). Passing offline local-prototype checks does not complete the live-posting, pilot, or deployment goals below.
+
 ## Goal
 
 Help Canadian university students spend less time preparing accurate applications for relevant co-op roles. Start with one user's eight-month data internships; validate the workflow with a small student pilot before broadening it. The product prepares and reviews applications. It does not promise interviews or submit without the applicant's explicit review and action.

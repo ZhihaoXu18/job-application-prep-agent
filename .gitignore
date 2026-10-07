@@ -6,6 +6,7 @@ __pycache__/
 profile*.json
 !profile.example.json
 private-resume-evidence*.json
+private-direction-report*.json
 *.pdf
 *.docx
 posting.txt

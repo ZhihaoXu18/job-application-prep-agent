@@ -12,6 +12,9 @@ let evidenceEditVersion = 0;
 let evidenceDraft = null;
 let evidenceControls = [];
 let confirmedEvidence = null;
+let directionReport = null;
+let directionReportRequestVersion = 0;
+let directionReportBusy = null;
 const termLabels = {"8_month_confirmed": "8 个月已确认", "4_month_only": "仅 4 个月", "variable_or_unclear": "任期待确认"};
 const statusLabels = {prepared: "已准备", applied: "已申请", interview: "面试", rejected: "未通过", no_response: "暂无回复", offer: "收到 offer"};
 
@@ -141,11 +144,13 @@ async function candidatePayload() {
 function updateEvidenceReadiness() {
   $("confirmEvidence").disabled = !(evidenceFingerprint && $("evidenceChecked").checked);
   $("downloadEvidence").disabled = !confirmedEvidence;
+  $("generateDirectionReport").disabled = !confirmedEvidence || directionReportBusy !== null;
 }
 
 function markEvidenceDirty() {
   evidenceEditVersion++;
   confirmedEvidence = null;
+  invalidateDirections();
   $("evidenceChecked").checked = false;
   $("evidenceStatus").textContent = "证据有未确认的修改；请重新核对后确认。";
   updateEvidenceReadiness();
@@ -157,6 +162,7 @@ function invalidateResumeEvidence() {
   evidenceDraft = null;
   evidenceControls = [];
   confirmedEvidence = null;
+  invalidateDirectionReport();
   $("evidenceChecked").checked = false;
   $("evidencePanel").hidden = true;
   $("evidenceStatus").textContent = "简历已更改；请重新整理证据。草稿不会保存到服务器。";
@@ -213,6 +219,7 @@ async function analyzeResumeEvidence() {
   const version = ++evidenceRequestVersion;
   const button = $("analyzeEvidence"); button.disabled = true;
   evidenceFingerprint = ""; confirmedEvidence = null; evidenceDraft = null;
+  invalidateDirections();
   $("evidencePanel").hidden = true; $("evidenceChecked").checked = false; updateEvidenceReadiness();
   $("evidenceStatus").textContent = "正在本机整理证据初稿……";
   try {
@@ -225,7 +232,7 @@ async function analyzeResumeEvidence() {
     if (version !== evidenceRequestVersion) return;
     evidenceFingerprint = draft.resume_fingerprint; evidenceDraft = draft;
     renderEvidence(draft);
-    $("evidenceStatus").textContent = "这是本地规则初稿。请核对、纠正或排除；确认后可下载私人草稿，尚不自动用于职位匹配或申请。";
+    $("evidenceStatus").textContent = "这是本地规则初稿。请核对、纠正或排除；确认后可下载私人草稿或在第 2 步生成证据方向报告。不会自动进入申请材料。";
   } catch (error) {
     if (version === evidenceRequestVersion) $("evidenceStatus").textContent = `无法整理：${error.message}`;
   } finally {
@@ -252,6 +259,7 @@ async function confirmResumeEvidence() {
     if (version !== evidenceRequestVersion || editVersion !== evidenceEditVersion || !$("evidenceChecked").checked) return;
     confirmedEvidence = result;
     $("evidenceStatus").textContent = "已核对原文位置并记录你的修改。仅保留在本页，可下载私人草稿；不是资格认证，也不会自动进入申请材料。";
+    $("directionReportStatus").textContent = "简历证据已确认。选择金融 / 数据大类（或暂不确定），即可生成方向报告。";
   } catch (error) {
     if (version === evidenceRequestVersion && editVersion === evidenceEditVersion) $("evidenceStatus").textContent = `无法确认：${error.message}`;
   } finally { updateEvidenceReadiness(); }
@@ -281,12 +289,16 @@ function invalidateDirections() {
   directionRequestVersion++;
   directionFingerprint = "";
   confirmedRoles = null;
+  $("directionRoles").value = "";
+  invalidateDirectionReport();
   $("directionPanel").hidden = true;
   $("directionSearch").hidden = true;
   $("directionStatus").textContent = "简历、大类或 profile 已更改；请重新展开方向并确认。";
 }
 
 function markDirectionsDirty() {
+  directionRequestVersion++;
+  if (directionReportBusy !== null) invalidateDirectionReport();
   confirmedRoles = null;
   $("directionSearch").hidden = true;
   $("directionStatus").textContent = "方向有未确认的修改；请再次点击“确认这些方向”。";
@@ -306,6 +318,7 @@ function addExplorationRole(role) {
 async function suggestDirections() {
   const button = $("suggestDirections");
   const version = ++directionRequestVersion;
+  invalidateDirectionReport();
   button.disabled = true;
   try {
     const payload = {...await candidatePayload(), role_family: $("roleFamily").value};
@@ -335,6 +348,7 @@ async function suggestDirections() {
       }
     }
     const list = $("directionResults");
+    $("directionKeywordBlock").hidden = false;
     list.replaceChildren();
     for (const suggestion of result.suggestions) {
       const item = element("div", "direction-item");
@@ -356,6 +370,92 @@ async function suggestDirections() {
   } finally {
     button.disabled = false;
   }
+}
+
+function invalidateDirectionReport() {
+  directionReportRequestVersion++;
+  directionReportBusy = null;
+  directionReport = null;
+  $("directionReportPanel").hidden = true;
+  $("downloadDirectionReport").disabled = true;
+  $("directionReportStatus").textContent = confirmedEvidence
+    ? "输入已更改，请重新生成证据方向报告。"
+    : "先整理并确认简历证据，再生成报告；不需要 API 密钥。";
+  updateEvidenceReadiness();
+}
+
+function renderDirectionReport(report) {
+  const root = $("directionReportResults"); root.replaceChildren();
+  $("directionReportScope").textContent = report.scope_note;
+  $("directionReportOrdering").textContent = report.ordering_note +
+    (report.omitted_fragments ? ` 有 ${report.omitted_fragments} 条简历线索因初稿限制未纳入。` : "");
+  if (!report.supported_category) root.append(element("p", "direction-empty", "此大类暂未提供证据模板。可以使用下方快速探索，或选择金融 / 数据；这不是不适合该大类的结论。"));
+  for (const item of report.reports) {
+    const card = element("article", "role-report");
+    card.append(element("h5", "", item.role), element("p", "", item.interest_selected
+      ? `兴趣来源：你选择了 ${report.role_family.label}。兴趣不计为能力证据。`
+      : "未设置兴趣大类：仅展示模板，不推断你的偏好。"), element("p", "", item.summary));
+    for (const topic of item.topics) {
+      const section = element("div", "report-topic");
+      section.append(element("strong", "", `${topic.label} · ${topic.status_label}`),
+        element("small", "", `项目模板标签（任一）：${topic.template_labels.join("、")}；不是职位要求。`));
+      for (const row of topic.evidence) {
+        const source = element("div", "report-evidence");
+        source.append(element("small", "", `原文第 ${row.line} 行 · ${row.kind_label} · ${row.matched_labels.join("、")}`),
+          element("blockquote", "", row.quote));
+        if (row.type_disagreement) source.append(element("small", "", "规则类型与审阅类型不同；报告保守处理，否定线索不升级为正向技能。"));
+        section.append(source);
+      }
+      card.append(section);
+    }
+    const add = element("button", "", "＋ 添加到目标方向"); add.type = "button";
+    add.addEventListener("click", () => { if (directionReport === report) addExplorationRole(item.role); });
+    card.append(add); root.append(card);
+  }
+  $("directionReportPanel").hidden = false;
+  $("downloadDirectionReport").disabled = false;
+}
+
+async function generateDirectionReport() {
+  if (!confirmedEvidence) return;
+  invalidateDirectionReport();
+  const reportVersion = directionReportRequestVersion;
+  directionReportBusy = reportVersion;
+  const version = ++directionRequestVersion, editVersion = evidenceEditVersion;
+  const evidence = confirmedEvidence;
+  const family = $("roleFamily").value;
+  const button = $("generateDirectionReport"); button.disabled = true;
+  $("directionReportStatus").textContent = "正在本机对照已确认的证据和探索模板……";
+  try {
+    const payload = {...await candidatePayload(), role_family: family,
+      evidence_review_confirmed: true, evidence_fingerprint: evidence.resume_fingerprint,
+      evidence_edits: evidence.evidence.map(({id, kind, labels, included, note}) => ({id, kind, labels, included, note})),
+    };
+    const current = () => reportVersion === directionReportRequestVersion && version === directionRequestVersion &&
+      editVersion === evidenceEditVersion && evidence === confirmedEvidence && family === $("roleFamily").value;
+    if (!current()) return;
+    const report = await api("/api/direction-report", {method: "POST",
+      headers: {"Content-Type": "application/json", "X-Job-Agent": "local-ui"}, body: JSON.stringify(payload)});
+    if (!current()) return;
+    directionReport = report; renderDirectionReport(report);
+    directionFingerprint = report.resume_fingerprint; confirmedRoles = null;
+    $("directionSearch").hidden = true;
+    $("familyResults").hidden = true; $("directionKeywordBlock").hidden = true;
+    if (!$("directionRoles").value.trim()) $("directionRoles").value = report.current_roles.join("\n");
+    $("directionPanel").hidden = false;
+    $("directionReportStatus").textContent = "报告已生成。选择想探索的岗位，再在下方确认目标方向；不会自动选择、搜索或投递。";
+    $("directionStatus").textContent = "目标方向仍需你明确确认；报告不是资格结论。";
+  } catch (error) {
+    if (reportVersion === directionReportRequestVersion && version === directionRequestVersion)
+      $("directionReportStatus").textContent = `无法生成报告：${error.message}`;
+  } finally {
+    if (directionReportBusy === reportVersion) directionReportBusy = null;
+    updateEvidenceReadiness();
+  }
+}
+
+function downloadDirectionReport() {
+  if (directionReport) downloadText("private-direction-report.json", JSON.stringify(directionReport, null, 2), "application/json");
 }
 
 function confirmDirections() {
@@ -680,10 +780,12 @@ $("resumeText").addEventListener("input", invalidateResumeEvidence);
 $("analyzeEvidence").addEventListener("click", analyzeResumeEvidence);
 $("confirmEvidence").addEventListener("click", confirmResumeEvidence);
 $("downloadEvidence").addEventListener("click", downloadResumeEvidence);
-$("evidenceChecked").addEventListener("change", () => { evidenceEditVersion++; confirmedEvidence = null; updateEvidenceReadiness(); });
+$("evidenceChecked").addEventListener("change", () => { evidenceEditVersion++; confirmedEvidence = null; invalidateDirections(); updateEvidenceReadiness(); });
 $("profileFile").addEventListener("change", () => { $("profileFileName").textContent = $("profileFile").files[0]?.name || "未提供则不假设偏好"; invalidateDirections(); });
 $("roleFamily").addEventListener("change", invalidateDirections);
 $("suggestDirections").addEventListener("click", suggestDirections);
+$("generateDirectionReport").addEventListener("click", generateDirectionReport);
+$("downloadDirectionReport").addEventListener("click", downloadDirectionReport);
 $("confirmDirections").addEventListener("click", confirmDirections);
 $("directionRoles").addEventListener("input", markDirectionsDirty);
 $("prepareForm").addEventListener("submit", prepare);
@@ -698,4 +800,8 @@ for (const id of ["editedDraft", "reviewNotes", "checkPosting", "checkTerm", "ch
   $(id).addEventListener("change", markReviewDirty);
 }
 syncSourceMode();
-refreshState().catch((error) => showNotice(error.message, true));
+if (window.location?.protocol === "file:") {
+  $("fileNotice").hidden = false;
+  $("keyNotice").textContent = "HTML 文件只能展示界面，请使用本地服务地址。";
+  for (const id of ["analyzeEvidence", "suggestDirections", "prepareButton"]) $(id).disabled = true;
+} else refreshState().catch((error) => showNotice(`无法连接本地服务：${error.message}`, true));

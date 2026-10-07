@@ -29,4 +29,4 @@ The browser requires source attestation for confirmation and invalidates it afte
 - HTTP extraction/review require neither key nor posting and create no output files.
 - Frontend editing clears review/download readiness; delayed results cannot overwrite changed source or annotations.
 
-Next: source-grounded role templates and explainable direction reports. Reviewed JSON is a foundation, not yet a matching input.
+The original milestone stopped at the evidence draft. The 2026-10-06 [week-2 integration](week-2-acceptance.md) now uses revalidated, reviewed evidence for finance/data exploration reports. It still does not import downloaded JSON or automatically promote annotations into application-generation facts.

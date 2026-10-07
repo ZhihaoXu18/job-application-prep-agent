@@ -19,6 +19,7 @@ from direction_suggestions import (
     ROLE_FAMILIES, apply_confirmed_directions, get_role_family, resume_fingerprint, suggest_directions,
 )
 from resume_evidence import extract_resume_evidence, review_resume_evidence
+from direction_report import build_direction_report
 from job_agent import (
     CandidateProfile,
     STATUSES,
@@ -314,6 +315,11 @@ class LocalHandler(BaseHTTPRequestHandler):
                 self._json(200, extract_resume_evidence(resume_from_request(data)))
             elif self.path == "/api/resume-evidence/review":
                 self._json(200, review_resume_evidence(resume_from_request(data), data))
+            elif self.path == "/api/direction-report":
+                resume = resume_from_request(data)
+                report = build_direction_report(resume, data)
+                report["current_roles"] = profile_from_request(data, resume).preferences.target_roles
+                self._json(200, report)
             elif self.path == "/api/feedback":
                 self._feedback(data)
             elif self.path == "/api/review":

@@ -196,5 +196,117 @@ function input(id) { for (const listener of node(id).listeners.input || []) list
   run('evidenceFingerprint = "same resume"; evidenceDraft = sampleEvidence;');
   for (const listener of node('roleFamily').listeners.change) listener();
   assert.equal(run('evidenceFingerprint'), 'same resume');
-  console.log('16 editor/export/status/direction/evidence state regressions passed');
+
+  // Report controls require reviewed evidence, not an extraction draft.
+  run('confirmedEvidence = null; updateEvidenceReadiness();');
+  assert.equal(node('generateDirectionReport').disabled, true);
+  run('confirmedEvidence = {...sampleEvidence, reviewed:true}; updateEvidenceReadiness();');
+  assert.equal(node('generateDirectionReport').disabled, false);
+  node('roleFamily').value = 'finance';
+  node('directionRoles').value = '';
+  run('api = (path, options) => { globalThis.reportPath = path; globalThis.reportPayload = JSON.parse(options.body); return new Promise(resolve => { globalThis.resolveReport = resolve; }); };');
+  const sampleReport = {
+    resume_fingerprint:'evidence-test', role_family:{id:'finance',label:'金融'}, current_roles:[],
+    scope_note:'Local templates, not vacancies', ordering_note:'No score', omitted_fragments:0,
+    supported_category:true, reports:[{id:'financial-analyst', role:'Financial Analyst Co-op', interest_selected:true,
+      summary:'Not a match rate', topics:[{label:'表格', status_label:'课程线索', template_labels:['Excel'],
+        evidence:[{line:1,kind_label:'课程表述',matched_labels:['Excel'],quote:'Coursework Excel',type_disagreement:false}]}]}],
+  };
+  context.sampleReport = sampleReport;
+  const reportRequest = run('generateDirectionReport()');
+  await Promise.resolve();
+  assert.equal(run('reportPath'), '/api/direction-report');
+  assert.equal(run('reportPayload.evidence_review_confirmed'), true);
+  assert.equal(run('Object.hasOwn(reportPayload.evidence_edits[0], "quote")'), false);
+  run('resolveReport(sampleReport);');
+  await reportRequest;
+  assert.equal(node('directionReportPanel').hidden, false);
+  assert.equal(node('downloadDirectionReport').disabled, false);
+  assert.equal(node('directionRoles').value, '');
+  assert.equal(run('confirmedRoles'), null);
+  assert.equal(node('directionKeywordBlock').hidden, true);
+
+  // Choosing a report role is still an editable, unconfirmed direction.
+  const reportCard = node('directionReportResults').children[0];
+  for (const listener of reportCard.children.at(-1).listeners.click) listener();
+  assert.equal(node('directionRoles').value, 'Financial Analyst Co-op');
+  assert.equal(run('confirmedRoles'), null);
+  run('confirmDirections();');
+  assert.equal(run('confirmedRoles[0]'), 'Financial Analyst Co-op');
+  run('downloadDirectionReport();');
+  assert.equal(run('evidenceDownload.filename'), 'private-direction-report.json');
+  assert.equal(run('JSON.parse(evidenceDownload.text).reports.length'), 1);
+
+  // Evidence edits invalidate both a downloaded report and its confirmed roles.
+  run('markEvidenceDirty();');
+  assert.equal(run('directionReport'), null);
+
+  assert.equal(run('confirmedRoles'), null);
+  assert.equal(node('downloadDirectionReport').disabled, true);
+  assert.equal(node('generateDirectionReport').disabled, true);
+
+  // Category changes preserve evidence but discard delayed reports.
+  run('confirmedEvidence = {...sampleEvidence, reviewed:true};');
+  const staleReport = run('generateDirectionReport()');
+  await Promise.resolve();
+  node('roleFamily').value = 'data';
+  for (const listener of node('roleFamily').listeners.change) listener();
+  run('resolveReport(sampleReport);');
+  await staleReport;
+  assert.equal(run('directionReport'), null);
+  assert.equal(run('confirmedEvidence.reviewed'), true);
+  assert.equal(node('directionReportPanel').hidden, true);
+
+  // Editing targets during a request prevents old response from overwriting them.
+  const targetRace = run('generateDirectionReport()');
+  await Promise.resolve();
+  node('directionRoles').value = 'My manually edited role';
+  input('directionRoles');
+  run('resolveReport(sampleReport);');
+  await targetRace;
+  assert.equal(run('directionReport'), null);
+  assert.equal(node('directionRoles').value, 'My manually edited role');
+
+  // Resume changes and attestation removal also ignore pending reports.
+  const sourceRace = run('generateDirectionReport()');
+  await Promise.resolve();
+  input('resumeText');
+  run('resolveReport(sampleReport);');
+  await sourceRace;
+  assert.equal(run('directionReport'), null);
+  assert.equal(run('confirmedEvidence'), null);
+  run('confirmedEvidence = {...sampleEvidence, reviewed:true};');
+  const attestationRace = run('generateDirectionReport()');
+  await Promise.resolve();
+  node('evidenceChecked').checked = false;
+  for (const listener of node('evidenceChecked').listeners.change) listener();
+  run('resolveReport(sampleReport);');
+  await attestationRace;
+  assert.equal(run('directionReport'), null);
+
+  // Finishing an older request cannot enable controls for a newer pending request.
+  run('confirmedEvidence = {...sampleEvidence, reviewed:true}; globalThis.reportResolvers = []; api = () => new Promise(resolve => reportResolvers.push(resolve));');
+  const earlierReport = run('generateDirectionReport()');
+  await Promise.resolve();
+  for (const listener of node('roleFamily').listeners.change) listener();
+  const newerReport = run('generateDirectionReport()');
+  await Promise.resolve();
+  run('reportResolvers[0](sampleReport);');
+  await earlierReport;
+  assert.equal(node('generateDirectionReport').disabled, true);
+  run('reportResolvers[1](sampleReport);');
+  await newerReport;
+  assert.equal(node('generateDirectionReport').disabled, false);
+
+  // A directly opened HTML file presents local-server guidance, not broken API calls.
+  const fileNodes = new Map();
+  const fileContext = vm.createContext({
+    document: {getElementById: id => { if (!fileNodes.has(id)) fileNodes.set(id, node(Symbol())); return fileNodes.get(id); },
+      querySelectorAll: () => [], querySelector: () => ({value:'url'})},
+    window: {location:{protocol:'file:'}}, fetch: () => { throw new Error('Must not fetch from file URL'); },
+  });
+  vm.runInContext(fs.readFileSync(require('node:path').join(__dirname, 'web/app.js'), 'utf8'), fileContext);
+  assert.equal(fileNodes.get('fileNotice').hidden, false);
+  assert.equal(fileNodes.get('prepareButton').disabled, true);
+  console.log('25 editor/export/status/direction/evidence/report/startup state regressions passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

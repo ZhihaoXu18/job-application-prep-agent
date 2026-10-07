@@ -24,3 +24,15 @@
 #directionSearchLinks a{display:inline-block;border:1px solid #b3d0c3;border-radius:7px;padding:7px 10px;color:#276950;font-size:11px;font-weight:700;text-decoration:none}
 #directionSearchLinks a:hover{text-decoration:underline}
 @media(max-width:550px){.direction-start{align-items:flex-start;flex-direction:column}}
+.direction-report { margin: 18px 0; padding: 16px; border: 1px solid #d6e3db; border-radius: 12px; background: #f8fbf9; }
+.direction-report h4 { margin: 0 0 10px; color: #284e42; }
+.role-report { margin: 14px 0; padding: 14px; border: 1px solid #e0e7e2; border-radius: 10px; background: #fff; }
+.role-report h5 { margin: 0 0 6px; font-size: 15px; }
+.role-report > p { font-size: 12px; line-height: 1.65; color: #586d62; }
+.report-topic { border-top: 1px solid #e7ece8; padding: 10px 0; font-size: 12px; line-height: 1.7; }
+.report-topic > strong { display: block; color: #345b4a; }
+.report-topic small { display: block; color: #697b70; }
+.report-topic blockquote { margin: 6px 0; padding: 0 0 0 10px; border-left: 2px solid #bfd0c3; overflow-wrap: anywhere; }
+.report-evidence { margin: 8px 0; }
+.role-report button, .direction-report > button { padding: 8px 12px; border: 1px solid #c4d5c8; border-radius: 8px; background: #eef5f0; color: #305342; cursor: pointer; }
+.direction-report > button:disabled { opacity: .5; cursor: default; }
